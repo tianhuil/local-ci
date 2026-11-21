@@ -280,11 +280,28 @@ exec ${REAL_GIT} "$@"
     expect(await Bun.file(join(gitDir, 'local-ci', 'logs', root.sha.slice(0, 7), 'unit.log')).exists()).toBe(true);
   });
 
-  test('fresh global install runs through the package shebang', async () => {
+  test('dist guard fails on stale output without rewriting dist', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'local-ci-dist-'));
+    for (const name of ['package.json', 'tsconfig.json']) execFileSync('cp', [join(process.cwd(), name), fixture]);
+    for (const name of ['src', 'dist']) execFileSync('cp', ['-R', join(process.cwd(), name), fixture]);
+    execFileSync('ln', ['-s', join(process.cwd(), 'node_modules'), join(fixture, 'node_modules')]);
+    const dist = join(fixture, 'dist', 'index.js');
+    const stale = `${await readFile(dist, 'utf8')}\n// stale artifact\n`;
+    await writeFile(dist, stale);
+    const result = spawnSync('bun', ['run', 'check-dist'], { cwd: fixture, encoding: 'utf8' });
+    expect(result.status).not.toBe(0);
+    expect(await readFile(dist, 'utf8')).toBe(stale);
+  });
+
+  test('fresh global install from a Git archive runs through the package shebang', async () => {
+    const checkout = await mkdtemp(join(tmpdir(), 'local-ci-archive-'));
+    execFileSync('sh', ['-c', `git archive HEAD | tar -x -C ${checkout}`], { cwd: process.cwd() });
+    execFileSync('bun', ['install', '--production'], { cwd: checkout, encoding: 'utf8' });
     const install = await mkdtemp(join(tmpdir(), 'local-ci-install-'));
     const installed = join(install, 'bin', 'local-ci');
-    execFileSync('bun', ['install', '--global', process.cwd()], { env: { ...process.env, BUN_INSTALL: install }, encoding: 'utf8' });
+    execFileSync('bun', ['install', '--global', checkout], { env: { ...process.env, BUN_INSTALL: install }, encoding: 'utf8' });
     const result = spawnSync(installed, ['--version'], { env: { ...process.env, BUN_INSTALL: install }, encoding: 'utf8' });
+    if (result.status !== 0) throw new Error(`archive install failed: ${result.stderr}`);
     expect(result.status).toBe(0);
     expect(result.stdout).toBe('0.1.0\n');
   });
