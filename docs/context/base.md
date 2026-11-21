@@ -17,7 +17,7 @@ To avoid repository bloat, ref contention, and maintenance overhead, we will **n
 
 The solution consists of a lightweight CLI wrapper (`local-ci`) paired with a declarative repository configuration file (`local-ci.yml`):
 
-1. **Trigger:** The agent runs `local-ci` after each commit. The commit must be pushed before results are posted (see **Push Before Posting** below).
+1. **Trigger:** The agent runs `local-ci` after each commit. By default the runner pushes the current branch first (see **Push Before Posting** below).
 2. **Declarative Check Definition (`local-ci.yml`):** A committed YAML file at the repository root listing the required checks (e.g., `lint`, `typecheck`, `unit`, or `nektos/act` jobs; `act` needs Docker and does not support every GitHub Actions feature, so an `act` job can behave differently than on GitHub). Each check maps 1-to-1 to a named Commit Status in GitHub (context `local-ci/<check-name>`).
 3. **Clean-State Verification:** Before running any check, the runner verifies that the working tree is clean (`git status --porcelain`) so unverified or uncommitted local edits cannot be certified against a commit SHA.
 4. **Local Execution:** The runner executes each command locally and records its exit code and duration. Output is shown in the Author's terminal only. A failing check does not stop the run: every check runs and every result is posted.
@@ -50,7 +50,7 @@ Smaller decisions, easy to reverse:
 * **Already-Tested Commits:** Without local ref caching, amending a commit message or rebasing produces a new SHA and requires re-running the local checks. For the same SHA, the runner queries the GitHub API first and skips checks that already have a `success` Commit Status; `--force` runs every check anyway.
 * **Clean Tree Is Not a Clean Environment:** `git status --porcelain` ignores gitignored state (`node_modules`, build caches, `.env`) and local tool versions, so a local run can differ from a fresh checkout. We accept this; it is good enough for PRs, and main still runs on GitHub CI.
 * **Check List Drift:** `local-ci.yml` and the GitHub workflows that verify main are separate lists, so a PR can pass locally and still fail on main. This is a minor downside; main's CI catches it.
-* **Push Before Posting:** A Commit Status attaches to a commit SHA that GitHub already has, so the runner must confirm the local `HEAD` is pushed before posting. No PR is needed: if a PR is opened later with that commit as its head, the existing statuses appear in it. This forces agents to push each commit, which is fine.
+* **Push Before Posting:** A Commit Status attaches to a commit SHA that GitHub already has, so the runner pushes before running any check. It pushes the current branch to its upstream (setting `origin/<branch>` as upstream if there is none) and never force-pushes. If the push is rejected, nothing runs and nothing is posted. It refuses to run on the default branch, because pushing there would bypass PR review. `--no-push` skips the push and instead refuses to run unless `HEAD` is already on GitHub. No PR is needed: if a PR is opened later with that commit as its head, the existing statuses appear in it.
 
 ---
 
