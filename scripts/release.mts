@@ -339,9 +339,9 @@ export const release: Run = (mode, config, { install }) => {
 	}
 	if (tagCommit)
 		log(`${tag} already exists on ${config.remote}; building anyway.`);
-	if (git(["status", "--porcelain", "--untracked-files=no"])) {
+	if (git(["status", "--porcelain"])) {
 		throw new ReleaseError(
-			"Working tree has uncommitted changes; commit or stash them first.",
+			"Working tree has uncommitted or untracked changes; commit or stash them first.",
 		);
 	}
 
@@ -403,6 +403,7 @@ export const release: Run = (mode, config, { install }) => {
 				`refs/tags/${tag}`,
 			]);
 		} catch {
+			git(["tag", "-d", tag]);
 			throw new ReleaseError(
 				`Failed to atomically publish ${tag} and ${config.releaseBranch}`,
 			);

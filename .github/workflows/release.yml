@@ -26,7 +26,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun run lint && bun run typecheck && bun test
+      - run: bun run verify
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
