@@ -10,7 +10,7 @@
 		"typecheck": "tsc --noEmit",
 		"test": "bun test",
 		"build": "tsc",
-		"verify": "bun run lint && bun run typecheck && bun test && bun run build"
+		"verify": "bun run lint && bun run typecheck && bun run build && bun test"
 	},
 	"dependencies": { "p-map": "^7.0.2", "yaml": "^2.6.1" },
 	"devDependencies": {

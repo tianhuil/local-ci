@@ -7,6 +7,11 @@ import { join } from "node:path";
 const git = (args: string[], cwd: string) =>
 	execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
+const releaseEnv = (path?: string) => ({
+	...process.env,
+	...(path ? { PATH: path } : {}),
+});
+
 async function releaseRepo() {
 	const root = await mkdtemp(join(tmpdir(), "local-ci-release-"));
 	const remote = join(
@@ -168,7 +173,9 @@ describe("release flow", () => {
 		git(["commit", "-qm", "version 0.1.1"], repo.root);
 		git(["push", "-q", "origin", "main"], repo.root);
 		const mainHead = git(["rev-parse", "HEAD"], repo.root);
+		const refsBefore = git(["ls-remote", "origin"], repo.root);
 		const result = spawnSync("scripts/release.sh", ["--dry-run"], {
+			env: releaseEnv(),
 			cwd: repo.root,
 			encoding: "utf8",
 		});
@@ -178,8 +185,94 @@ describe("release flow", () => {
 		);
 		expect(git(["rev-parse", "HEAD"], repo.root)).toBe(mainHead);
 		expect(git(["status", "--porcelain"], repo.root)).toBe("");
-		expect(git(["ls-remote", "origin", "refs/heads/release"], repo.root)).toBe(
-			"",
+		expect(git(["ls-remote", "origin"], repo.root)).toBe(refsBefore);
+	});
+
+	test("uses fallback identity without git user configuration", async () => {
+		const repo = await releaseRepo();
+		for (const key of ["user.name", "user.email"]) {
+			spawnSync("git", ["config", "--unset-all", key], { cwd: repo.root });
+		}
+		const env = releaseEnv();
+		for (const key of [
+			"GIT_AUTHOR_NAME",
+			"GIT_AUTHOR_EMAIL",
+			"GIT_COMMITTER_NAME",
+			"GIT_COMMITTER_EMAIL",
+			"GITHUB_ACTOR",
+		])
+			delete env[key];
+		const result = spawnSync("scripts/release.sh", [], {
+			cwd: repo.root,
+			env,
+			encoding: "utf8",
+		});
+		expect(result.status).toBe(0);
+		const release = git(
+			["ls-remote", "origin", "refs/heads/release"],
+			repo.root,
+		).split(/\s/)[0];
+		expect(git(["show", "-s", "--format=%an <%ae>", release], repo.root)).toBe(
+			"release.sh <release@local-ci>",
+		);
+	});
+
+	test("leaves the real index clean when commit-tree fails", async () => {
+		const repo = await releaseRepo();
+		const shim = await mkdtemp(join(tmpdir(), "local-ci-git-shim-"));
+		const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+		await writeFile(
+			join(shim, "git"),
+			`#!/bin/sh\nif [ "$1" = commit-tree ]; then exit 42; fi\nexec ${realGit} "$@"\n`,
+		);
+		await chmod(join(shim, "git"), 0o755);
+		const result = spawnSync("scripts/release.sh", [], {
+			cwd: repo.root,
+			env: releaseEnv(`${shim}:${process.env.PATH}`),
+			encoding: "utf8",
+		});
+		expect(result.status).not.toBe(0);
+		expect(git(["status", "--porcelain"], repo.root)).toBe("");
+		expect(git(["diff", "--cached"], repo.root)).toBe("");
+	});
+
+	test("fails without publishing when the remote rejects the tag", async () => {
+		const repo = await releaseRepo();
+		const hook = join(repo.remote, "hooks/pre-receive");
+		await writeFile(
+			hook,
+			"#!/bin/sh\nwhile read old new ref; do case $ref in refs/tags/*) echo reject-tag >&2; exit 1;; esac; done\nexit 0\n",
+		);
+		await chmod(hook, 0o755);
+		const refsBefore = git(["ls-remote", "origin"], repo.root);
+		const result = spawnSync("scripts/release.sh", [], {
+			cwd: repo.root,
+			env: releaseEnv(),
+			encoding: "utf8",
+		});
+		expect(result.status).not.toBe(0);
+		expect(`${result.stdout}${result.stderr}`).toContain(
+			"failed to atomically publish v0.1.0 and release",
+		);
+		expect(git(["ls-remote", "origin"], repo.root)).toBe(refsBefore);
+	});
+
+	test("reports a failing GitHub release creation", async () => {
+		const repo = await releaseRepo();
+		const shim = await mkdtemp(join(tmpdir(), "local-ci-gh-shim-"));
+		await writeFile(
+			join(shim, "gh"),
+			"#!/bin/sh\necho gh-failed >&2\nexit 7\n",
+		);
+		await chmod(join(shim, "gh"), 0o755);
+		const result = spawnSync("scripts/release.sh", [], {
+			cwd: repo.root,
+			env: { ...releaseEnv(`${shim}:${process.env.PATH}`), GH_TOKEN: "test" },
+			encoding: "utf8",
+		});
+		expect(result.status).not.toBe(0);
+		expect(`${result.stdout}${result.stderr}`).toContain(
+			"GitHub Release v0.1.0 was not created; run gh release create v0.1.0",
 		);
 	});
 });
