@@ -5,7 +5,7 @@ Runs pull request checks on the author's machine and reports the results to GitH
 ## Language
 
 **Local CI**:
-The practice of running a PR's Checks on the author's machine and posting each result to GitHub as a Check Run.
+The practice of running a PR's Checks on the author's machine and posting each result to GitHub as a Commit Status.
 _Avoid_: local testing, pre-push checks
 
 **Main CI**:
@@ -17,7 +17,7 @@ Whoever pushed the commit being checked, whether a coding agent or a human. Loca
 _Avoid_: developer, agent, user (when the person or agent who pushed is meant)
 
 **Runner**:
-The `local-ci` command-line tool that executes Checks and posts Check Runs.
+The `local-ci` command-line tool that executes Checks and posts Commit Statuses.
 _Avoid_: CLI wrapper, local runner, harness
 
 **Run**:
@@ -28,9 +28,9 @@ _Avoid_: execution, build, pipeline
 One named, required verification listed in `local-ci.yml`, such as `lint` or `unit`.
 _Avoid_: job, test, task
 
-**Check Run**:
-GitHub's record of one Check's result on one commit, named `local-ci/<check>`.
-_Avoid_: status, check result, commit status
+**Commit Status**:
+GitHub's pass/fail record of one Check on one commit, named `local-ci/<check>`.
+_Avoid_: Check Run, check result, status
 
 **Clean Tree**:
 A working tree with no uncommitted or untracked changes, so the results describe exactly the commit being reported. It says nothing about ignored files or tool versions.
