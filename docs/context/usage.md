@@ -9,17 +9,32 @@ $ local-ci
 
 ---
 
+## Install
+
+```console
+$ bun install --global github:tianhuil/local-ci
+```
+
+The Runner needs `git` and `gh` on PATH. Checks run in the Author's normal shell.
+
+---
+
 ## Configure Checks
 
 `local-ci.yml` at the repository root maps each Check name to a shell command. Each name becomes the Commit Status `local-ci/<name>`.
 
 ```yaml
+timeout: 60             # seconds one Check may run; optional; default 60
 checks:
   lint: bun run lint
   typecheck: bun run typecheck
   unit: bun test
-  build: act -j build   # runs a GitHub Actions job locally; needs Docker
+  build:
+    command: act -j build   # runs a GitHub Actions job locally; needs Docker
+    timeout: 300            # optional; overrides the top-level timeout
 ```
+
+A Check maps to either a command string or an object with a `command` and an optional `timeout` in seconds. A Check that exceeds its timeout is killed and fails; its line shows `timeout` in place of an exit code.
 
 ---
 
@@ -35,7 +50,7 @@ The Runner never prompts. If `git push` would ask for credentials, it fails at o
 
 ## Run all Checks
 
-The Runner pushes first, then runs every Check, even after one fails, then posts every result. The samples below show stdout and stderr together, as a terminal does.
+The Runner pushes first, then runs every Check in parallel — all of them at once by default, or up to `--jobs N` at a time — even after one fails, then posts every result. Check lines print in `local-ci.yml` order once every Check has finished, so stdout stays stable while Checks interleave; live progress (`running lint…`) goes to stderr. The samples below show stdout and stderr together, as a terminal does.
 
 ```console
 $ local-ci
@@ -126,7 +141,8 @@ Each error is one line naming what failed, followed by the command that fixes it
 | `--no-push`, commit not on GitHub | `error: 3f9c2ab is not on GitHub; run local-ci without --no-push` | 1 |
 | No GitHub token | `error: no GitHub token; run gh auth login, then local-ci` | 1 |
 | Invalid `local-ci.yml` | `error: local-ci.yml: check "unit" has no command; add one, e.g. unit: bun test` | 1 |
-| Unknown option | `error: unknown option --forse; valid options: --force, --no-push, --help, --version` | 2 |
+| Unknown option | `error: unknown option --forse; valid options: --force, --no-push, --jobs, --help, --version` | 2 |
+| Invalid `--jobs` value | `error: invalid value "0" for --jobs; use a positive integer, such as --jobs 4` | 2 |
 | Extra argument | `error: unexpected argument "unit"; local-ci takes no arguments` | 2 |
 
 The Runner never force-pushes. A rejected push is the Author's to resolve.
@@ -159,6 +175,7 @@ Options:
   --force          run every Check, even ones that already passed on this
                    commit (default: skip them)
   --no-push        don't push; HEAD must already be on GitHub (default: push)
+  -j, --jobs <N>   run up to N Checks at once (default: all Checks at once)
   -V, --version    print the version
   -h, --help       print this help
 
@@ -166,6 +183,7 @@ Examples:
   local-ci                 run after each commit
   local-ci --force         re-run everything, e.g. to rule out a flaky pass
   local-ci --no-push       the commit was already pushed some other way
+  local-ci --jobs 1        run Checks one at a time, e.g. if they conflict
 
 Exit codes:
   0  every Check passed or had already passed
@@ -179,8 +197,6 @@ Exit codes:
 
 ## Not yet decided
 
-- **Log location:** `.git/local-ci/logs/` avoids needing a `.gitignore` entry, but `git gc` never cleans it, so old logs pile up.
-- **`--format json`:** the `cli-for-agents` guidance asks for a JSON form of results. The plain lines may be enough for one command.
 - **Streaming:** only failed Checks' output is shown, after the summary, rather than all output live.
 - **Subset of Checks:** there's no way to run one Check (e.g. `local-ci unit`).
 - **`--force-with-lease`:** an opt-in force-push for Authors who amend or rebase.

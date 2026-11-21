@@ -20,7 +20,7 @@ The solution consists of a lightweight CLI wrapper (`local-ci`) paired with a de
 1. **Trigger:** The agent runs `local-ci` after each commit. By default the runner pushes the current branch first (see **Push Before Posting** below).
 2. **Declarative Check Definition (`local-ci.yml`):** A committed YAML file at the repository root listing the required checks (e.g., `lint`, `typecheck`, `unit`, or `nektos/act` jobs; `act` needs Docker and does not support every GitHub Actions feature, so an `act` job can behave differently than on GitHub). Each check maps 1-to-1 to a named Commit Status in GitHub (context `local-ci/<check-name>`).
 3. **Clean-State Verification:** Before running any check, the runner verifies that the working tree is clean (`git status --porcelain`) so unverified or uncommitted local edits cannot be certified against a commit SHA.
-4. **Local Execution:** The runner executes each command locally and records its exit code and duration. Output is shown in the Author's terminal only. A failing check does not stop the run: every check runs and every result is posted.
+4. **Local Execution:** The runner executes each command locally, in parallel (`pMap`; all Checks at once by default, or up to `--jobs N` at a time), and records each exit code and duration. A Check that exceeds its timeout (default 60 seconds; configurable in `local-ci.yml`) is killed and fails. Output is shown in the Author's terminal only. A failing check does not stop the run: every check runs and every result is posted.
 5. **GitHub Publishing:** Using the Author's `gh` token, the runner posts a `success` or `failure` Commit Status to the active `HEAD` commit SHA. Reviewers see pass/fail per check in the PR. They cannot see logs in GitHub (see **Future**).
 
 ---
@@ -37,6 +37,9 @@ Smaller decisions, easy to reverse:
 | Decision Area | Chosen Approach | Rejected Alternatives | Why We Made This Decision |
 | --- | --- | --- | --- |
 | **GitHub Reporting API** | **Commit Statuses API** (`/statuses/{sha}`) via the Author's `gh` token | Check Runs API (`/check-runs`) via a GitHub App | **No Shared Secret:** Check Runs can only be written by a GitHub App, which means creating an app and distributing its private key to every Author. Commit Statuses accept the token Authors already have. We give up inline logs, which are out of scope for now. |
+| **Check execution** | Parallel by default, capped by `--jobs N` (`pMap`) | Sequential; fixed worker pool | Wall-clock time dominates when every Check must run; Authors with conflicting Checks pass `--jobs 1`. |
+| **Check timeout** | Kill a Check after 60 seconds; top-level and per-Check override in `local-ci.yml` | No timeout; CLI flag only | A hung Check would block the parallel Run forever. |
+| **Distribution** | Install from the GitHub repository: `bun install --global github:tianhuil/local-ci` | npm registry | npm publishing adds 2FA ceremony the team doesn't want; everyone already has GitHub access. |
 
 ---
 
