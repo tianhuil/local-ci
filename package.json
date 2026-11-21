@@ -10,8 +10,7 @@
 		"typecheck": "tsc --noEmit",
 		"test": "bun test",
 		"build": "tsc",
-		"check-dist": "tmp=$(mktemp -d) && tsc --outDir \"$tmp\" && cmp \"$tmp/index.js\" dist/index.js && rm -rf \"$tmp\"",
-		"verify": "bun run lint && bun run typecheck && bun test && bun run check-dist"
+		"verify": "bun run lint && bun run typecheck && bun test && bun run build"
 	},
 	"dependencies": { "p-map": "^7.0.2", "yaml": "^2.6.1" },
 	"devDependencies": {

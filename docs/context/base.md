@@ -39,7 +39,8 @@ Smaller decisions, easy to reverse:
 | **GitHub Reporting API** | **Commit Statuses API** (`/statuses/{sha}`) via the Author's `gh` token | Check Runs API (`/check-runs`) via a GitHub App | **No Shared Secret:** Check Runs can only be written by a GitHub App, which means creating an app and distributing its private key to every Author. Commit Statuses accept the token Authors already have. We give up inline logs, which are out of scope for now. |
 | **Check execution** | Parallel by default, capped by `--jobs N` (`pMap`) | Sequential; fixed worker pool | Wall-clock time dominates when every Check must run; Authors with conflicting Checks pass `--jobs 1`. |
 | **Check timeout** | Kill a Check after 60 seconds; top-level and per-Check override in `local-ci.yml` | No timeout; CLI flag only | A hung Check would block the parallel Run forever. |
-| **Distribution** | Install from the GitHub repository: `bun install --global github:tianhuil/local-ci` | npm registry | npm publishing adds 2FA ceremony the team doesn't want; everyone already has GitHub access. |
+| **Distribution** | Install from GitHub release tags (`bun install --global github:tianhuil/local-ci#vX.Y.Z`, or `#release`); an Action builds the `release` branch | npm registry | npm publishing adds 2FA ceremony the team doesn't want; everyone already has GitHub access. |
+| **Release pipeline** | Action on version bump → release branch + tag + GitHub Release (`scripts/release.sh`) | Tracked dist on main | main stays source-only; builds are reproducible from tags |
 
 ---
 

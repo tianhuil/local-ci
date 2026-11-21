@@ -12,8 +12,11 @@ $ local-ci
 ## Install
 
 ```console
-$ bun install --global github:tianhuil/local-ci
+$ bun install --global github:tianhuil/local-ci#v0.1.0
+$ bun install --global github:tianhuil/local-ci#release
 ```
+
+Install a newer tag to upgrade. `main` carries source only, so installs come from the `release` branch tags.
 
 The Runner needs `git` and `gh` on PATH. Checks run in the Author's normal shell.
 
