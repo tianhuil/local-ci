@@ -2,6 +2,7 @@
 	"name": "local-ci",
 	"version": "0.1.0",
 	"private": true,
+	"license": "MIT",
 	"type": "module",
 	"bin": { "local-ci": "bin/local-ci.js" },
 	"scripts": {
