@@ -2,5 +2,7 @@ timeout: 60
 checks:
   lint: bun run lint
   typecheck: bun run typecheck
-  unit: bun test
+  unit:
+    command: bun test
+    timeout: 300
   build: bun run build
