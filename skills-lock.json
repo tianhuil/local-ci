@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "skills": {
+    "axi": {
+      "source": "kunchenguid/axi",
+      "commit": "f338c0849fadb457c4ce69ad7b55d78470403c41",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/axi/SKILL.md",
+      "computedHash": "cfc70265e8ae8fd7c6aa4ca30c85cd5a7c3460f074f5e832de05f024361c2ba3"
+    }
+  }
+}
