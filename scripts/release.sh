@@ -22,6 +22,14 @@ if [[ -n $(git status --porcelain) ]]; then
 fi
 VERSION=$(bun -e 'const p = await Bun.file("package.json").json(); console.log(p.version)')
 TAG="${TAG_PREFIX}${VERSION}"
+create_github_release() {
+  if [[ -n ${NOTES_CMD:-} ]]; then
+    notes=$(eval "$NOTES_CMD")
+    gh release create "$TAG" --notes "$notes"
+  else
+    gh release create "$TAG" --generate-notes
+  fi
+}
 tag_commit=$(git ls-remote --tags "$REMOTE" "refs/tags/$TAG^{}" | awk '{print $1}')
 if [[ -z $tag_commit ]]; then
   tag_commit=$(git ls-remote --tags "$REMOTE" "refs/tags/$TAG" | awk '{print $1}')
@@ -30,6 +38,14 @@ release_commit=$(git ls-remote "$REMOTE" "refs/heads/$RELEASE_BRANCH" | awk '{pr
 if [[ -n $tag_commit ]]; then
   if [[ $tag_commit == "$release_commit" ]]; then
     echo "already released $TAG"
+    if command -v gh >/dev/null 2>&1 && [[ -n ${GH_TOKEN:-} ]]; then
+      if ! gh release view "$TAG" >/dev/null 2>&1; then
+        if ! gh release create "$TAG" --generate-notes; then
+          echo "error: GitHub Release $TAG was not created; run gh release create $TAG" >&2
+          exit 1
+        fi
+      fi
+    fi
     exit 0
   fi
   echo "error: inconsistent release refs for $TAG: tag $tag_commit, $RELEASE_BRANCH ${release_commit:-missing}" >&2
@@ -69,14 +85,8 @@ if ! git push --atomic "$REMOTE" "$COMMIT:refs/heads/$RELEASE_BRANCH" "$COMMIT:r
   echo "error: failed to atomically publish $TAG and $RELEASE_BRANCH" >&2
   exit 1
 fi
-if [[ -n ${NOTES_CMD:-} ]]; then
-  notes=$(eval "$NOTES_CMD")
-  release_args=(gh release create "$TAG" --notes "$notes")
-else
-  release_args=(gh release create "$TAG" --generate-notes)
-fi
 if command -v gh >/dev/null 2>&1 && [[ -n ${GH_TOKEN:-} ]]; then
-  if ! "${release_args[@]}"; then
+  if ! create_github_release; then
     echo "error: GitHub Release $TAG was not created; run gh release create $TAG" >&2
     exit 1
   fi

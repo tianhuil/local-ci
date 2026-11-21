@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
@@ -7,7 +8,19 @@ import pMap from "p-map";
 import YAML from "yaml";
 
 const exec = promisify(execFile);
-const VERSION = "0.1.0";
+function loadVersion(): string {
+	try {
+		const packageJson = JSON.parse(
+			readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+		) as { version?: unknown };
+		if (typeof packageJson.version !== "string" || packageJson.version === "")
+			throw new Error("missing version");
+		return packageJson.version;
+	} catch {
+		throw new Error("error: package.json: unable to read version");
+	}
+}
+const VERSION = loadVersion();
 const HELP = `Usage: local-ci [options]\n\nPush the current branch, run every Check in local-ci.yml, and post one\nCommit Status (local-ci/<check>) per Check to the pushed commit on GitHub.\nPrints one line per Check; full logs go to .git/local-ci/logs/<sha>/.\n\nOptions:\n  --force          run every Check, even ones that already passed on this\n                   commit (default: skip them)\n  --no-push        don't push; HEAD must already be on GitHub (default: push)\n  -j, --jobs <N>   run up to N Checks at once (default: all Checks at once)\n  -V, --version    print the version\n  -h, --help       print this help\n\nExamples:\n  local-ci                 run after each commit\n  local-ci --force         re-run everything, e.g. to rule out a flaky pass\n  local-ci --no-push       the commit was already pushed some other way\n  local-ci --jobs 1        run Checks one at a time, e.g. if they conflict\n\nExit codes:\n  0  every Check passed or had already passed\n  1  a Check failed, or the Run could not start (see the error line)\n  2  unknown option or argument\n`;
 type Options = { force: boolean; noPush: boolean; jobs?: number };
 type Check = { name: string; command: string; timeout: number };

@@ -7,10 +7,10 @@ import { join } from "node:path";
 const git = (args: string[], cwd: string) =>
 	execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
-const releaseEnv = (path?: string) => ({
-	...process.env,
-	...(path ? { PATH: path } : {}),
-});
+const releaseEnv = (path?: string) => {
+	const { GH_TOKEN, GITHUB_TOKEN, ...env } = process.env;
+	return { ...env, ...(path ? { PATH: path } : {}) };
+};
 
 async function releaseRepo() {
 	const root = await mkdtemp(join(tmpdir(), "local-ci-release-"));
@@ -53,6 +53,7 @@ describe("release flow", () => {
 			const repo = await releaseRepo();
 			const sourceHead = git(["rev-parse", "HEAD"], repo.root);
 			const first = spawnSync("scripts/release.sh", [], {
+				env: releaseEnv(),
 				cwd: repo.root,
 				encoding: "utf8",
 			});
@@ -82,6 +83,7 @@ describe("release flow", () => {
 			).split(" ");
 			expect(parents).toEqual([sourceHead]);
 			const second = spawnSync("scripts/release.sh", [], {
+				env: releaseEnv(),
 				cwd: repo.root,
 				encoding: "utf8",
 			});
@@ -102,6 +104,7 @@ describe("release flow", () => {
 			const newSourceHead = git(["rev-parse", "HEAD"], repo.root);
 			git(["push", "-q", "origin", "main"], repo.root);
 			const third = spawnSync("scripts/release.sh", [], {
+				env: releaseEnv(),
 				cwd: repo.root,
 				encoding: "utf8",
 			});
@@ -113,6 +116,28 @@ describe("release flow", () => {
 			expect(
 				git(["show", "-s", "--format=%P", secondRelease], repo.root).split(" "),
 			).toEqual([previousRelease, newSourceHead]);
+
+			const bumpedCheckout = await mkdtemp(
+				join(tmpdir(), "local-ci-release-checkout-"),
+			);
+			execFileSync("git", [
+				"clone",
+				"-q",
+				"--branch",
+				"v0.1.1",
+				repo.remote,
+				bumpedCheckout,
+			]);
+			execFileSync("bun", ["install", "--frozen-lockfile", "--production"], {
+				cwd: bumpedCheckout,
+			});
+			const bumpedInstalled = spawnSync(
+				process.execPath,
+				["bin/local-ci.js", "--version"],
+				{ cwd: bumpedCheckout, encoding: "utf8" },
+			);
+			expect(bumpedInstalled.status).toBe(0);
+			expect(bumpedInstalled.stdout).toBe("0.1.1\n");
 
 			const checkout = await mkdtemp(
 				join(tmpdir(), "local-ci-release-checkout-"),
@@ -260,19 +285,39 @@ describe("release flow", () => {
 	test("reports a failing GitHub release creation", async () => {
 		const repo = await releaseRepo();
 		const shim = await mkdtemp(join(tmpdir(), "local-ci-gh-shim-"));
+		const calls = join(shim, "calls");
 		await writeFile(
 			join(shim, "gh"),
-			"#!/bin/sh\necho gh-failed >&2\nexit 7\n",
+			`#!/bin/sh
+if [ "$1" = release ] && [ "$2" = view ]; then exit 1; fi
+if [ "$1" = release ] && [ "$2" = create ]; then
+  echo create >> "${calls}"
+  if [ ! -f "${calls}.succeeded" ]; then touch "${calls}.succeeded"; exit 7; fi
+  exit 0
+fi
+exit 2
+`,
 		);
 		await chmod(join(shim, "gh"), 0o755);
+		const env = {
+			...releaseEnv(`${shim}:${process.env.PATH}`),
+			GH_TOKEN: "test",
+		};
 		const result = spawnSync("scripts/release.sh", [], {
 			cwd: repo.root,
-			env: { ...releaseEnv(`${shim}:${process.env.PATH}`), GH_TOKEN: "test" },
+			env,
 			encoding: "utf8",
 		});
 		expect(result.status).not.toBe(0);
 		expect(`${result.stdout}${result.stderr}`).toContain(
 			"GitHub Release v0.1.0 was not created; run gh release create v0.1.0",
 		);
+		const retry = spawnSync("scripts/release.sh", [], {
+			cwd: repo.root,
+			env,
+			encoding: "utf8",
+		});
+		expect(retry.status).toBe(0);
+		expect((await readFile(calls, "utf8")).match(/^create$/gm)).toHaveLength(2);
 	});
 });
