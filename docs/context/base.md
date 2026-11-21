@@ -40,7 +40,7 @@ Smaller decisions, easy to reverse:
 | **Check execution** | Parallel by default, capped by `--jobs N` (`pMap`) | Sequential; fixed worker pool | Wall-clock time dominates when every Check must run; Authors with conflicting Checks pass `--jobs 1`. |
 | **Check timeout** | Kill a Check after 60 seconds; top-level and per-Check override in `local-ci.yml` | No timeout; CLI flag only | A hung Check would block the parallel Run forever. |
 | **Distribution** | Install from GitHub release tags (`bun install --global github:tianhuil/local-ci#vX.Y.Z`, or `#release`); an Action builds the `release` branch | npm registry | npm publishing adds 2FA ceremony the team doesn't want; everyone already has GitHub access. |
-| **Release pipeline** | Action on version bump → release branch + tag + GitHub Release (`scripts/release.sh`) | Tracked dist on main | main stays source-only; builds are reproducible from tags |
+| **Release pipeline** | Action on version bump → release branch + tag + GitHub Release (`scripts/release.mts`) | Tracked dist on main | main stays source-only; builds are reproducible from tags |
 
 ---
 

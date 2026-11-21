@@ -37,7 +37,7 @@ async function releaseRepo() {
 		join(process.cwd(), "node_modules"),
 		join(root, "node_modules"),
 	);
-	await chmod(join(root, "scripts/release.sh"), 0o755);
+	await chmod(join(root, "scripts/release.mts"), 0o755);
 	git(["add", "."], root);
 	git(["commit", "-qm", "source"], root);
 	git(["remote", "add", "origin", remote], root);
@@ -52,11 +52,15 @@ describe("release flow", () => {
 		async () => {
 			const repo = await releaseRepo();
 			const sourceHead = git(["rev-parse", "HEAD"], repo.root);
-			const first = spawnSync("scripts/release.sh", [], {
-				env: releaseEnv(),
-				cwd: repo.root,
-				encoding: "utf8",
-			});
+			const first = spawnSync(
+				"node",
+				["scripts/release.mts", "publish", "--no-github-release"],
+				{
+					env: releaseEnv(),
+					cwd: repo.root,
+					encoding: "utf8",
+				},
+			);
 			if (first.status !== 0)
 				throw new Error(`release failed: ${first.stderr}`);
 			expect(first.status).toBe(0);
@@ -65,10 +69,13 @@ describe("release flow", () => {
 				repo.root,
 			).split(/\s/)[0];
 			const tag = git(
-				["ls-remote", "origin", "refs/tags/v0.1.0"],
+				["ls-remote", "--tags", "origin", "refs/tags/v0.1.0^{}"],
 				repo.root,
 			).split(/\s/)[0];
 			expect(release).toBe(tag);
+			expect(git(["cat-file", "-t", "refs/tags/v0.1.0"], repo.root)).toBe(
+				"tag",
+			);
 			expect(release).not.toBe("");
 			const tree = git(["show", "-s", "--format=%T", release], repo.root);
 			expect(
@@ -82,13 +89,19 @@ describe("release flow", () => {
 				repo.root,
 			).split(" ");
 			expect(parents).toEqual([sourceHead]);
-			const second = spawnSync("scripts/release.sh", [], {
-				env: releaseEnv(),
-				cwd: repo.root,
-				encoding: "utf8",
-			});
+			const second = spawnSync(
+				"node",
+				["scripts/release.mts", "publish", "--no-github-release"],
+				{
+					env: releaseEnv(),
+					cwd: repo.root,
+					encoding: "utf8",
+				},
+			);
 			expect(second.status).toBe(0);
-			expect(second.stdout).toContain("already released v0.1.0");
+			expect(second.stderr).toContain(
+				"v0.1.0 already exists on origin; nothing to release.",
+			);
 			const previousRelease = release;
 			const packagePath = join(repo.root, "package.json");
 			const packageJson = JSON.parse(await readFile(packagePath, "utf8")) as {
@@ -103,11 +116,15 @@ describe("release flow", () => {
 			git(["commit", "-qm", "source 0.1.1"], repo.root);
 			const newSourceHead = git(["rev-parse", "HEAD"], repo.root);
 			git(["push", "-q", "origin", "main"], repo.root);
-			const third = spawnSync("scripts/release.sh", [], {
-				env: releaseEnv(),
-				cwd: repo.root,
-				encoding: "utf8",
-			});
+			const third = spawnSync(
+				"node",
+				["scripts/release.mts", "publish", "--no-github-release"],
+				{
+					env: releaseEnv(),
+					cwd: repo.root,
+					encoding: "utf8",
+				},
+			);
 			expect(third.status).toBe(0);
 			const secondRelease = git(
 				["ls-remote", "origin", "refs/heads/release"],
@@ -199,18 +216,22 @@ describe("release flow", () => {
 		git(["push", "-q", "origin", "main"], repo.root);
 		const mainHead = git(["rev-parse", "HEAD"], repo.root);
 		const refsBefore = git(["ls-remote", "origin"], repo.root);
-		const result = spawnSync("scripts/release.sh", ["--dry-run"], {
+		const result = spawnSync("node", ["scripts/release.mts", "check"], {
 			env: releaseEnv(),
 			cwd: repo.root,
 			encoding: "utf8",
 		});
 		expect(result.status).toBe(0);
-		expect(result.stdout).toMatch(
-			/would push [0-9a-f]+:refs\/heads\/release and tag v0\.1\.1/,
-		);
+		expect(result.stdout.trim()).toMatch(/^[0-9a-f]{40}$/);
 		expect(git(["rev-parse", "HEAD"], repo.root)).toBe(mainHead);
 		expect(git(["status", "--porcelain"], repo.root)).toBe("");
 		expect(git(["ls-remote", "origin"], repo.root)).toBe(refsBefore);
+		expect(
+			spawnSync("git", ["show-ref", "--tags"], {
+				cwd: repo.root,
+				encoding: "utf8",
+			}).stdout,
+		).toBe("");
 	});
 
 	test("uses fallback identity without git user configuration", async () => {
@@ -227,18 +248,22 @@ describe("release flow", () => {
 			"GITHUB_ACTOR",
 		])
 			delete env[key];
-		const result = spawnSync("scripts/release.sh", [], {
-			cwd: repo.root,
-			env,
-			encoding: "utf8",
-		});
+		const result = spawnSync(
+			"node",
+			["scripts/release.mts", "publish", "--no-github-release"],
+			{
+				cwd: repo.root,
+				env,
+				encoding: "utf8",
+			},
+		);
 		expect(result.status).toBe(0);
 		const release = git(
 			["ls-remote", "origin", "refs/heads/release"],
 			repo.root,
 		).split(/\s/)[0];
 		expect(git(["show", "-s", "--format=%an <%ae>", release], repo.root)).toBe(
-			"release.sh <release@local-ci>",
+			"release.mts <release@local-ci>",
 		);
 	});
 
@@ -251,11 +276,15 @@ describe("release flow", () => {
 			`#!/bin/sh\nif [ "$1" = commit-tree ]; then exit 42; fi\nexec ${realGit} "$@"\n`,
 		);
 		await chmod(join(shim, "git"), 0o755);
-		const result = spawnSync("scripts/release.sh", [], {
-			cwd: repo.root,
-			env: releaseEnv(`${shim}:${process.env.PATH}`),
-			encoding: "utf8",
-		});
+		const result = spawnSync(
+			"node",
+			["scripts/release.mts", "publish", "--no-github-release"],
+			{
+				cwd: repo.root,
+				env: releaseEnv(`${shim}:${process.env.PATH}`),
+				encoding: "utf8",
+			},
+		);
 		expect(result.status).not.toBe(0);
 		expect(git(["status", "--porcelain"], repo.root)).toBe("");
 		expect(git(["diff", "--cached"], repo.root)).toBe("");
@@ -270,14 +299,18 @@ describe("release flow", () => {
 		);
 		await chmod(hook, 0o755);
 		const refsBefore = git(["ls-remote", "origin"], repo.root);
-		const result = spawnSync("scripts/release.sh", [], {
-			cwd: repo.root,
-			env: releaseEnv(),
-			encoding: "utf8",
-		});
+		const result = spawnSync(
+			"node",
+			["scripts/release.mts", "publish", "--no-github-release"],
+			{
+				cwd: repo.root,
+				env: releaseEnv(),
+				encoding: "utf8",
+			},
+		);
 		expect(result.status).not.toBe(0);
 		expect(`${result.stdout}${result.stderr}`).toContain(
-			"failed to atomically publish v0.1.0 and release",
+			"Failed to atomically publish v0.1.0 and release",
 		);
 		expect(git(["ls-remote", "origin"], repo.root)).toBe(refsBefore);
 	});
@@ -303,7 +336,7 @@ exit 2
 			...releaseEnv(`${shim}:${process.env.PATH}`),
 			GH_TOKEN: "test",
 		};
-		const result = spawnSync("scripts/release.sh", [], {
+		const result = spawnSync("node", ["scripts/release.mts", "publish"], {
 			cwd: repo.root,
 			env,
 			encoding: "utf8",
@@ -312,12 +345,121 @@ exit 2
 		expect(`${result.stdout}${result.stderr}`).toContain(
 			"GitHub Release v0.1.0 was not created; run gh release create v0.1.0",
 		);
-		const retry = spawnSync("scripts/release.sh", [], {
+		const retry = spawnSync("node", ["scripts/release.mts", "publish"], {
 			cwd: repo.root,
 			env,
 			encoding: "utf8",
 		});
 		expect(retry.status).toBe(0);
 		expect((await readFile(calls, "utf8")).match(/^create$/gm)).toHaveLength(2);
+	});
+
+	test("rejects diverged tag and release branch refs", async () => {
+		const repo = await releaseRepo();
+		const other = git(["rev-parse", "HEAD"], repo.root);
+		git(["commit", "--allow-empty", "-qm", "other"], repo.root);
+		git(
+			[
+				"update-ref",
+				"refs/heads/release",
+				git(["rev-parse", "HEAD"], repo.root),
+			],
+			repo.root,
+		);
+		git(["tag", "-a", "v0.1.0", "-m", "diverged", other], repo.root);
+		git(
+			["push", "-q", "origin", "refs/heads/release", "refs/tags/v0.1.0"],
+			repo.root,
+		);
+		const result = spawnSync(
+			"node",
+			["scripts/release.mts", "publish", "--no-github-release"],
+			{
+				cwd: repo.root,
+				env: releaseEnv(),
+				encoding: "utf8",
+			},
+		);
+		expect(result.status).not.toBe(0);
+		expect(`${result.stdout}${result.stderr}`).toContain(
+			"Inconsistent release refs",
+		);
+	});
+
+	test(
+		"packs an installable tarball and strips lifecycle scripts",
+		{ timeout: 30000 },
+		async () => {
+			const repo = await releaseRepo();
+			const result = spawnSync("node", ["scripts/release.mts", "pack"], {
+				cwd: repo.root,
+				env: releaseEnv(),
+				encoding: "utf8",
+			});
+			expect(result.status).toBe(0);
+			const tarball = result.stdout.trim();
+			expect(tarball).toEndWith(".tgz");
+			const packageText = execFileSync(
+				"tar",
+				["-xOf", tarball, "package/package.json"],
+				{
+					encoding: "utf8",
+				},
+			);
+			const packed = JSON.parse(packageText) as {
+				scripts?: Record<string, string>;
+			};
+			expect(packed.scripts?.build).toBeUndefined();
+			expect(packed.scripts?.test).toBe("bun test");
+			const installDir = await mkdtemp(
+				join(tmpdir(), "local-ci-pack-install-"),
+			);
+			execFileSync(
+				"npm",
+				[
+					"install",
+					"--offline",
+					"--ignore-scripts",
+					"--prefix",
+					installDir,
+					tarball,
+				],
+				{
+					encoding: "utf8",
+					stdio: "ignore",
+				},
+			);
+			const installed = spawnSync(
+				join(installDir, "node_modules/.bin/local-ci"),
+				["--version"],
+				{ encoding: "utf8" },
+			);
+			expect(installed.status).toBe(0);
+			expect(installed.stdout).toBe("0.1.0\n");
+		},
+	);
+
+	test("fails when package files omit built output", async () => {
+		const repo = await releaseRepo();
+		const packagePath = join(repo.root, "package.json");
+		const packageJson = JSON.parse(await readFile(packagePath, "utf8")) as {
+			files: string[];
+		};
+		packageJson.files = ["bin"];
+		await writeFile(
+			packagePath,
+			`${JSON.stringify(packageJson, null, "\t")}\n`,
+		);
+		git(["add", "package.json"], repo.root);
+		git(["commit", "-qm", "omit dist"], repo.root);
+		const result = spawnSync("node", ["scripts/release.mts", "check"], {
+			cwd: repo.root,
+			env: releaseEnv(),
+			encoding: "utf8",
+		});
+		expect(result.status).not.toBe(0);
+		expect(`${result.stdout}${result.stderr}`).toContain(
+			"Installs would drop these built files",
+		);
 	});
 });

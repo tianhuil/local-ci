@@ -13,3 +13,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run verify
+      - name: Verify packed install
+        run: |
+          set -euo pipefail
+          tarball=$(node scripts/release.mts pack)
+          npm install -g "$tarball"
+          test "$(local-ci --version)" = "$(node -p "require('./package.json').version")"
