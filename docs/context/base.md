@@ -11,8 +11,6 @@ To avoid repository bloat, ref contention, and maintenance overhead, we will **n
 ## Why now?
 
 1. Agentic development means we consume a lot more GitHub CI time than previously.  This gets expensive. Moving PR checks to local CI removes that cost for PR runs; main keeps running on GitHub CI, so its cost does not change.
-
-   > TODO: add current monthly GitHub Actions minutes and cost, and the share spent on PR runs.
 2. Agentic development on a git worktree is already verified by the agent but then has to wait on a cloud CI pipeline as a PR for the same set of tests.  This slows down the agent for no real gain.
 
 ## Intended Product Overview
@@ -22,7 +20,7 @@ The solution consists of a lightweight CLI wrapper (`local-ci`) paired with a de
 1. **Trigger:** The agent runs `local-ci` after each commit. The commit must be pushed before results are posted (see **Push Before Posting** below).
 2. **Declarative Check Definition (`local-ci.yml`):** A committed YAML file at the repository root listing the required checks (e.g., `lint`, `typecheck`, `unit`, or `nektos/act` jobs; `act` needs Docker and does not support every GitHub Actions feature, so an `act` job can behave differently than on GitHub). Each check maps 1-to-1 to a named Check Run in GitHub (`local-ci/<check-name>`).
 3. **Clean-State Verification:** Before running any check, the runner verifies that the working tree is clean (`git status --porcelain`) so unverified or uncommitted local edits cannot be certified against a commit SHA.
-4. **Local Execution & Log Capture:** The runner executes each command locally, captures exit codes and stdout/stderr (truncated to GitHub's 65,535-character limit if necessary, keeping the end of the log, where failures appear), and records execution duration.
+4. **Local Execution & Log Capture:** The runner executes each command locally, captures exit codes and stdout/stderr (truncated to GitHub's 65,535-character limit if necessary, keeping the end of the log, where failures appear), and records execution duration. A failing check does not stop the run: every check runs and every result is posted.
 5. **Native GitHub UI Publishing:** Using a lightweight GitHub App installation token and `gh api`, the runner posts a completed Check Run to the active `HEAD` commit SHA. Reviewers see native check statuses and can click **Details** inside the PR **Checks** tab to read failure logs directly in GitHub.
 
 ---
@@ -41,10 +39,18 @@ The solution consists of a lightweight CLI wrapper (`local-ci`) paired with a de
 ## Operational Trade-Offs & Rollout Requirements
 
 * **GitHub App Key Distribution:** Because GitHub restricts `/check-runs` writes to GitHub Apps (rejecting standard user PATs), the team must create one internal GitHub App with `Checks: Read & Write` permission and distribute its `.pem` private key securely (e.g., via 1Password/Vault) so local runners can mint short-lived installation tokens.
-* **Branch Protection:** GitHub treats Check Runs posted via this API identically to cloud CI, allowing `local-ci/*` checks to be enforced in branch protection rules. We can also add a GitHub Action that reverts any commit that breaks CI and re-creates a new PR.
+* **No Branch Protection:** GitHub could require `local-ci/*` checks in branch protection rules, but that list would live in GitHub settings and have to be kept in sync with `local-ci.yml` by hand. We don't use it. Check Runs are informational, so a PR can be merged with failing or missing checks; Main CI still verifies main.
 * **Trust Model:** Because execution occurs on developer machines rather than isolated cloud runners, this relies on team trust rather than cryptographic server enforcement.
 * **Main stays on GitHub CI:** We want main branch to be verified by a neutral authoritative CI.  PRs are lower stake and agentically-run local CI is fine.
-* **Already-Tested Commits:** Without local ref caching, amending a commit message or rebasing requires re-running the local checks (or querying the GitHub API to see if a Check Run already exists for that commit SHA before executing).
+* **Already-Tested Commits:** Without local ref caching, amending a commit message or rebasing produces a new SHA and requires re-running the local checks. For the same SHA, the runner queries the GitHub API first and skips checks that already have a passing Check Run; `--force` runs every check anyway.
 * **Clean Tree Is Not a Clean Environment:** `git status --porcelain` ignores gitignored state (`node_modules`, build caches, `.env`) and local tool versions, so a local run can differ from a fresh checkout. We accept this; it is good enough for PRs, and main still runs on GitHub CI.
 * **Check List Drift:** `local-ci.yml` and the GitHub workflows that verify main are separate lists, so a PR can pass locally and still fail on main. This is a minor downside; main's CI catches it.
-* **Push Before Posting:** A Check Run attaches to a commit SHA that GitHub already has, so the runner must confirm the local `HEAD` is pushed and matches the PR head before posting. This forces agents to push each commit, which is fine.
+* **Push Before Posting:** A Check Run attaches to a commit SHA that GitHub already has, so the runner must confirm the local `HEAD` is pushed before posting. No PR is needed: if a PR is opened later with that commit as its head, the existing Check Runs appear in it. This forces agents to push each commit, which is fine.
+
+---
+
+## Future
+
+Out of scope for now:
+
+* **Revert on Main CI failure:** A GitHub Action that reverts any commit that fails Main CI and re-creates it as a new PR.
