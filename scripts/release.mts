@@ -154,13 +154,26 @@ const log = (message: string): void => {
 	process.stderr.write(`${message}\n`);
 };
 
+function gitEnvironment(
+	env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+	const result = { ...process.env, ...env };
+	result.GIT_AUTHOR_NAME =
+		result.GIT_AUTHOR_NAME || result.GITHUB_ACTOR || "release.mts";
+	result.GIT_AUTHOR_EMAIL = result.GIT_AUTHOR_EMAIL || "release@local-ci";
+	result.GIT_COMMITTER_NAME =
+		result.GIT_COMMITTER_NAME || result.GITHUB_ACTOR || "release.mts";
+	result.GIT_COMMITTER_EMAIL = result.GIT_COMMITTER_EMAIL || "release@local-ci";
+	return result;
+}
+
 function git(
 	args: string[],
 	options: { env?: NodeJS.ProcessEnv; input?: string } = {},
 ): string {
 	return execFileSync("git", args, {
 		encoding: "utf8",
-		env: options.env ?? process.env,
+		env: gitEnvironment(options.env),
 		input: options.input,
 		stdio: ["pipe", "pipe", "inherit"],
 	}).trim();
@@ -188,8 +201,10 @@ function remoteTagCommit(remote: string, tag: string): string | undefined {
 function fetchReleaseBranch({ remote, releaseBranch }: ReleaseConfig): boolean {
 	const refspec = `+refs/heads/${releaseBranch}:refs/remotes/${remote}/${releaseBranch}`;
 	return (
-		spawnSync("git", ["fetch", "--quiet", remote, refspec], { stdio: "ignore" })
-			.status === 0
+		spawnSync("git", ["fetch", "--quiet", remote, refspec], {
+			env: gitEnvironment(),
+			stdio: "ignore",
+		}).status === 0
 	);
 }
 
@@ -211,21 +226,7 @@ function commitRelease(
 ): string {
 	const dir = mkdtempSync(join(tmpdir(), "release-index-"));
 	try {
-		const env = {
-			...process.env,
-			GIT_AUTHOR_NAME:
-				process.env.GIT_AUTHOR_NAME ||
-				process.env.GITHUB_ACTOR ||
-				"release.mts",
-			GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || "release@local-ci",
-			GIT_COMMITTER_NAME:
-				process.env.GIT_COMMITTER_NAME ||
-				process.env.GITHUB_ACTOR ||
-				"release.mts",
-			GIT_COMMITTER_EMAIL:
-				process.env.GIT_COMMITTER_EMAIL || "release@local-ci",
-			GIT_INDEX_FILE: join(dir, "index"),
-		};
+		const env = gitEnvironment({ GIT_INDEX_FILE: join(dir, "index") });
 		git(["read-tree", "HEAD"], { env });
 		git(["add", "-f", config.distDir], { env });
 		const blob = git(["hash-object", "-w", "--stdin"], {

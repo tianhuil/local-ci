@@ -240,6 +240,8 @@ describe("release flow", () => {
 			spawnSync("git", ["config", "--unset-all", key], { cwd: repo.root });
 		}
 		const env = releaseEnv();
+		env.GIT_CONFIG_GLOBAL = "/dev/null";
+		env.GIT_CONFIG_SYSTEM = "/dev/null";
 		for (const key of [
 			"GIT_AUTHOR_NAME",
 			"GIT_AUTHOR_EMAIL",
@@ -418,8 +420,9 @@ exit 2
 				"npm",
 				[
 					"install",
-					"--offline",
 					"--ignore-scripts",
+					"--no-audit",
+					"--no-fund",
 					"--prefix",
 					installDir,
 					tarball,
