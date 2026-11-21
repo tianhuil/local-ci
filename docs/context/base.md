@@ -27,12 +27,16 @@ The solution consists of a lightweight CLI wrapper (`local-ci`) paired with a de
 
 ## Key Architectural Decisions & Rationale
 
+Recorded as ADRs:
+
+* [ADR 0001: Local CI for pull requests; Main CI stays in the cloud](../adr/0001-local-ci-for-prs-main-ci-for-main.md)
+* [ADR 0002: CI results live in GitHub, not in Git](../adr/0002-ci-results-live-in-github-not-git.md)
+
+Smaller decisions, easy to reverse:
+
 | Decision Area | Chosen Approach | Rejected Alternatives | Why We Made This Decision |
 | --- | --- | --- | --- |
-| **Result Storage** | **GitHub Commit Statuses** (stored in GitHub's database) | `git notes`, custom `refs/test/*` blobs, or `git-test` | **Performance & Repo Health:** Storing CI results as Git objects permanently inflates `.git/objects/pack` and slows down `git clone` and `git fetch` for the entire team. Keeping results in GitHub avoids adding a single byte to the Git repository. |
-| **Caching & Rebase Tracking** | **Stateless / On-Demand Execution** (no custom Git ref caching) | Tree-hash caching (`HEAD^{tree}` refs) | **Simplicity & Zero Ref Contention:** Pushing shared `git notes` causes non-fast-forward push conflicts when developers work concurrently, while managing sharded `refs/test/<first-2>/<rest>` adds custom ref-pruning complexity. Running checks directly without custom Git plumbing keeps the toolchain minimal and predictable. |
 | **GitHub Reporting API** | **Commit Statuses API** (`/statuses/{sha}`) via the Author's `gh` token | Check Runs API (`/check-runs`) via a GitHub App | **No Shared Secret:** Check Runs can only be written by a GitHub App, which means creating an app and distributing its private key to every Author. Commit Statuses accept the token Authors already have. We give up inline logs, which are out of scope for now. |
-| **Compute & Execution** | **Local Machine Execution** (`act` or direct CLI commands) | Cloud GitHub Actions runners | **Speed & Cost:** Eliminates cloud runner queue times and billing minutes while giving developers immediate feedback before or during push. |
 
 ---
 
