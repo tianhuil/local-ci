@@ -17,7 +17,7 @@ type ConfigValue = string | { command?: unknown; timeout?: unknown };
 const safeEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '' };
 
 async function git(args: string[], cwd = process.cwd()): Promise<string> {
-  return (await exec('git', args, { cwd, env: safeEnv })).stdout.trim();
+  return (await exec('git', args, { cwd, env: safeEnv })).stdout.trimEnd();
 }
 async function command(args: string[], cwd = process.cwd()) { return exec(args[0], args.slice(1), { cwd, env: safeEnv }); }
 function parseArgs(argv: string[]): Options {
@@ -60,6 +60,7 @@ async function loadChecks(): Promise<{ checks: Check[] }> {
   if (!entries || typeof entries !== 'object' || Array.isArray(entries) || Object.keys(entries).length === 0) throw new Error('error: local-ci.yml: checks must be a non-empty map');
   const checks: Check[] = [];
   for (const [name, raw] of Object.entries(entries as Record<string, ConfigValue>)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.includes('..')) throw new Error(`error: local-ci.yml: check "${name}" has invalid name; use letters, numbers, ., _, or -`);
     const objectValue = typeof raw === 'object' && raw !== null ? raw : undefined;
     const checkCommand = typeof raw === 'string' ? raw : objectValue?.command;
     if (typeof checkCommand !== 'string' || checkCommand.trim() === '') throw new Error(`error: local-ci.yml: check "${name}" has no command; add one, e.g. ${name}: bun test`);
@@ -170,16 +171,17 @@ export async function main() {
       console.log(`full log: .git/local-ci/logs/${info.sha.slice(0, 7)}/${result.check.name}.log`);
     }
     let posted = 0;
-    let checkFailures = ran.filter((result) => result.status === 'failed').length;
+    const checkFailures = ran.filter((result) => result.status === 'failed').length;
+    let postFailures = 0;
     for (const result of ran) {
       const state = result.status === 'passed' ? 'success' : 'failure';
       const description = result.status === 'passed' ? `passed in ${result.duration}s` : `failed in ${result.duration}s (${result.timedOut ? 'timeout' : `exit ${result.code}`})`;
       const context = `local-ci/${result.check.name}`;
       try { await command(['gh', 'api', `repos/${await repoSlug()}/statuses/${info.sha}`, '-f', `state=${state}`, '-f', `context=${context}`, '-f', `description=${description}`]); posted += 1; }
-      catch { console.error(`error: failed to post Commit Status ${context} to GitHub; run gh auth login, then local-ci`); checkFailures += 1; }
+      catch { console.error(`error: failed to post Commit Status ${context} to GitHub; run gh auth login, then local-ci`); postFailures += 1; }
     }
     if (posted > 0) console.log(`\nposted ${posted} Commit Status${posted === 1 ? '' : 'es'} to ${info.sha.slice(0, 7)}; ${checkFailures ? `${checkFailures} of ${info.checks.length} Checks failed` : `all ${info.checks.length} Checks passed`}`);
-    if (checkFailures) process.exitCode = 1;
+    if (checkFailures || postFailures) process.exitCode = 1;
   } catch (error) { if ((error as Error).message !== 'ARGUMENT_ERROR') { console.error((error as Error).message); process.exitCode = 1; } }
 }
 export { resolveGitDir };

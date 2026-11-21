@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveGitDir, runCheck } from '../src/index';
@@ -13,6 +13,7 @@ function git(args: string[], cwd: string, env?: NodeJS.ProcessEnv) { return exec
 async function fakeGh(dir: string) {
   const fakeBin = await mkdtemp(join(tmpdir(), 'local-ci-gh-'));
   await Bun.write(join(fakeBin, 'gh'), `#!/bin/sh
+if [ -n "${'${GH_ENV_LOG:-}'}" ]; then printf '%s|%s\n' "$GIT_TERMINAL_PROMPT" "$GIT_ASKPASS" >> "$GH_ENV_LOG"; fi
 if [ "$1" = auth ] && [ "$2" = token ]; then
   [ "${'${GH_NO_TOKEN:-0}'}" = 1 ] && exit 1
   echo token
@@ -22,7 +23,7 @@ if [ "$1" = api ]; then
   case "$2" in
     */commits/*) [ "${'${GH_COMMIT_MISSING:-0}'}" = 1 ] && exit 1; echo '{}'; exit 0 ;;
     */statuses/*)
-      case "$*" in *" -f "*) [ "${'${GH_POST_FAIL:-0}'}" = 1 ] && exit 1; echo '{}'; exit 0;; esac
+      case "$*" in *" -f "*) [ -n "${'${GH_POST_LOG:-}'}" ] && printf '%s\n' "$*" >> "${'${GH_POST_LOG}'}"; [ "${'${GH_POST_FAIL:-0}'}" = 1 ] && exit 1; case "$*" in *"${'${GH_FAIL_CONTEXT:-__never__}'}"*) exit 1;; esac; echo '{}'; exit 0;; esac
       echo "${'${GH_STATUSES:-[]}'}"; exit 0 ;;
   esac
 fi
@@ -50,6 +51,21 @@ function runCli(repo: Repo, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
   const path = `${repo.fakeBin}:${process.env.PATH}`;
   return spawnSync(process.execPath, [BIN, ...args], { cwd: repo.dir, env: { ...process.env, PATH: path, ...env }, encoding: 'utf8', timeout: 15000 });
 }
+async function installGitShim(repo: Repo, mode: 'record-push' | 'record-env') {
+  const shim = join(repo.fakeBin, 'git');
+  const body = mode === 'record-push'
+    ? `#!/bin/sh
+[ "$1" = push ] && { echo push >> "$NO_PUSH_LOG"; exit 99; }
+exec ${REAL_GIT} "$@"
+`
+    : `#!/bin/sh
+printf '%s|%s\n' "$GIT_TERMINAL_PROMPT" "$GIT_ASKPASS" >> "$GIT_ENV_LOG"
+exec ${REAL_GIT} "$@"
+`;
+  await Bun.write(shim, body);
+  await chmod(shim, 0o755);
+  return shim;
+}
 function allOutput(result: ReturnType<typeof runCli>) { return `${result.stdout}${result.stderr}`; }
 
 describe('local-ci CLI contract', () => {
@@ -63,6 +79,10 @@ describe('local-ci CLI contract', () => {
     const version = spawnSync(process.execPath, [BIN, '--version'], { encoding: 'utf8' });
     expect(version.status).toBe(0);
     expect(version.stdout).toBe('0.1.0\n');
+    const shortVersion = spawnSync(process.execPath, [BIN, '-V'], { encoding: 'utf8' });
+    expect(shortVersion.stdout).toBe('0.1.0\n');
+    const shortHelp = spawnSync(process.execPath, [BIN, '-h'], { encoding: 'utf8' });
+    expect(shortHelp.stdout).toBe(expected);
   });
 
   test('returns exit 2 and exact errors for argument failures', () => {
@@ -79,14 +99,27 @@ describe('local-ci CLI contract', () => {
 
   test('reports dirty tree and default branch without starting', async () => {
     const dirty = await makeRepo();
-    await writeFile(join(dirty.dir, 'dirty.txt'), 'dirty');
+    await mkdir(join(dirty.dir, 'src'));
+    await writeFile(join(dirty.dir, 'src/login.ts'), 'clean');
+    git(['add', 'src/login.ts'], dirty.dir);
+    git(['commit', '-qm', 'add login'], dirty.dir);
+    await writeFile(join(dirty.dir, 'src/login.ts'), 'dirty');
+    await writeFile(join(dirty.dir, 'notes.txt'), 'dirty');
     let result = runCli(dirty);
     expect(result.status).toBe(1);
-    expect(result.stderr.trim()).toContain('error: 1 uncommitted changes (dirty.txt); run git commit or git stash, then local-ci');
+    expect(result.stderr.trim()).toBe('error: 2 uncommitted changes (src/login.ts, notes.txt); run git commit or git stash, then local-ci');
     const main = await makeRepo('checks:\n  unit: echo ok\n', 'main');
     result = runCli(main);
     expect(result.status).toBe(1);
     expect(result.stderr.trim()).toBe('error: on default branch main; run git switch -c <branch>, then local-ci');
+  });
+
+  test('rejects unsafe check names before creating logs', async () => {
+    const repo = await makeRepo('checks:\n  "../../victim": echo bad\n');
+    const result = runCli(repo);
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim()).toBe('error: local-ci.yml: check "../../victim" has invalid name; use letters, numbers, ., _, or -');
+    expect(await Bun.file(join(repo.dir, '..', 'victim')).exists()).toBe(false);
   });
 
   test('reports missing token and invalid configuration exactly', async () => {
@@ -149,7 +182,7 @@ exec ${REAL_GIT} "$@"
     expect(upToDate.status).toBe(0);
     expect(upToDate.stderr).toContain('feature/login already up to date on origin (');
     const serial = await makeRepo(config);
-    started = Date.now(); result = runCli(serial, ['--jobs', '1']);
+    started = Date.now(); result = runCli(serial, ['-j', '1']);
     expect(result.status).toBe(0);
     expect(Date.now() - started).toBeGreaterThanOrEqual(1800);
   });
@@ -157,16 +190,21 @@ exec ${REAL_GIT} "$@"
   test('prints passed, failed, timeout, previews, full log, totals, and writes logs', async () => {
     const config = 'timeout: 1\nchecks:\n  pass: echo passed\n  fail: >-\n    node -e "process.stdout.write(\'short failure\'); process.exit(3)"\n  timeout: sleep 5\n';
     const repo = await makeRepo(config);
-    const result = runCli(repo);
+    const postLog = join(await mkdtemp(join(tmpdir(), 'local-ci-post-')), 'posts.log');
+    const result = runCli(repo, [], { GH_POST_LOG: postLog });
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain('pass     passed');
-    expect(result.stdout).toContain('fail     failed');
-    expect(result.stdout).toContain('exit 3');
-    expect(result.stdout).toContain('timeout  failed');
+    expect(result.stdout.split('\n')).toContain('pass     passed   1s');
+    expect(result.stdout.split('\n')).toContain('fail     failed   1s  exit 3');
+    expect(result.stdout.split('\n')).toContain('timeout  failed   1s  timeout');
     expect(result.stdout).toContain('timeout');
     expect(result.stdout).toContain('fail output:\nshort failure');
+    expect(result.stdout).not.toContain('fail output (last 1,500');
     expect(result.stdout).toContain(`full log: .git/local-ci/logs/${repo.sha.slice(0, 7)}/fail.log`);
     expect(result.stdout).toContain(`posted 3 Commit Statuses to ${repo.sha.slice(0, 7)}; 2 of 3 Checks failed`);
+    const posts = await readFile(postLog, 'utf8');
+    expect(posts).toContain('description=passed in 1s');
+    expect(posts).toContain('description=failed in 1s (exit 3)');
+    expect(posts).toContain('description=failed in 1s (timeout)');
     const long = await makeRepo('checks:\n  unit: >-\n    node -e "process.stdout.write(\'x\'.repeat(1596)+\'TAIL\'); process.exit(1)"\n');
     const longResult = runCli(long);
     expect(longResult.status).toBe(1);
@@ -180,7 +218,7 @@ exec ${REAL_GIT} "$@"
     let result = runCli(repo, [], { GH_STATUSES: '[{"state":"success","context":"local-ci/unit"}]' });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('unit   skipped  already passed');
-    expect(result.stdout).toContain('posted 1 Commit Status to');
+    expect(result.stdout).toContain(`posted 1 Commit Status to ${repo.sha.slice(0, 7)}; all 2 Checks passed`);
     result = runCli(repo, [], { GH_STATUSES: '[{"state":"success","context":"local-ci/unit"},{"state":"success","context":"local-ci/other"}]' });
     if (result.status !== 0) throw new Error(`all skipped failed: ${result.stderr} ${result.stdout}`);
     expect(result.status).toBe(0);
@@ -188,6 +226,40 @@ exec ${REAL_GIT} "$@"
     result = runCli(repo, ['--force'], { GH_STATUSES: '[{"state":"success","context":"local-ci/unit"},{"state":"success","context":"local-ci/other"}]' });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('posted 2 Commit Statuses');
+  });
+
+  test('runs --no-push against a commit already on the remote without pushing', async () => {
+    const repo = await makeRepo();
+    git(['push', '-q', '-u', 'origin', 'feature/login'], repo.dir);
+    await installGitShim(repo, 'record-push');
+    const pushLog = join(await mkdtemp(join(tmpdir(), 'local-ci-no-push-')), 'push.log');
+    const result = runCli(repo, ['--no-push'], { NO_PUSH_LOG: pushLog });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('posted 1 Commit Status to');
+    expect(await Bun.file(pushLog).exists()).toBe(false);
+  });
+
+  test('passes noninteractive git and gh environment variables', async () => {
+    const repo = await makeRepo();
+    await installGitShim(repo, 'record-env');
+    const gitLog = join(await mkdtemp(join(tmpdir(), 'local-ci-env-')), 'git.log');
+    const ghLog = join(await mkdtemp(join(tmpdir(), 'local-ci-env-')), 'gh.log');
+    const result = runCli(repo, [], { GIT_ENV_LOG: gitLog, GH_ENV_LOG: ghLog });
+    expect(result.status).toBe(0);
+    expect((await readFile(gitLog, 'utf8')).split('\n').filter(Boolean).every((line) => line === '0|')).toBe(true);
+    expect((await readFile(ghLog, 'utf8')).split('\n').filter(Boolean).every((line) => line === '0|')).toBe(true);
+  });
+
+  test('reports partial posting failures without corrupting check totals', async () => {
+    const repo = await makeRepo('checks:\n  a: echo a\n  b: echo b\n');
+    const postLog = join(await mkdtemp(join(tmpdir(), 'local-ci-post-')), 'posts.log');
+    const result = runCli(repo, [], { GH_FAIL_CONTEXT: 'local-ci/b', GH_POST_LOG: postLog });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(`posted 1 Commit Status to ${repo.sha.slice(0, 7)}; all 2 Checks passed`);
+    expect(result.stderr).toContain('error: failed to post Commit Status local-ci/b to GitHub; run gh auth login, then local-ci');
+    const posts = await readFile(postLog, 'utf8');
+    expect(posts).toContain('state=success');
+    expect(posts).toContain('description=passed in 1s');
   });
 
   test('reports posting failures and exits one', async () => {
@@ -208,12 +280,11 @@ exec ${REAL_GIT} "$@"
     expect(await Bun.file(join(gitDir, 'local-ci', 'logs', root.sha.slice(0, 7), 'unit.log')).exists()).toBe(true);
   });
 
-  test('fresh checkout can run the installed entrypoint without building', async () => {
-    const checkout = await mkdtemp(join(tmpdir(), 'local-ci-clone-'));
-    execFileSync('git', ['clone', '-q', process.cwd(), checkout]);
-    execFileSync('cp', ['-R', join(process.cwd(), 'bin'), checkout]);
-    execFileSync('cp', ['-R', join(process.cwd(), 'dist'), checkout]);
-    const result = spawnSync(process.execPath, [join(checkout, 'bin/local-ci.js'), '--version'], { cwd: checkout, encoding: 'utf8' });
+  test('fresh global install runs through the package shebang', async () => {
+    const install = await mkdtemp(join(tmpdir(), 'local-ci-install-'));
+    const installed = join(install, 'bin', 'local-ci');
+    execFileSync('bun', ['install', '--global', process.cwd()], { env: { ...process.env, BUN_INSTALL: install }, encoding: 'utf8' });
+    const result = spawnSync(installed, ['--version'], { env: { ...process.env, BUN_INSTALL: install }, encoding: 'utf8' });
     expect(result.status).toBe(0);
     expect(result.stdout).toBe('0.1.0\n');
   });

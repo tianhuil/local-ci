@@ -10,7 +10,7 @@ const VERSION = '0.1.0';
 const HELP = `Usage: local-ci [options]\n\nPush the current branch, run every Check in local-ci.yml, and post one\nCommit Status (local-ci/<check>) per Check to the pushed commit on GitHub.\nPrints one line per Check; full logs go to .git/local-ci/logs/<sha>/.\n\nOptions:\n  --force          run every Check, even ones that already passed on this\n                   commit (default: skip them)\n  --no-push        don't push; HEAD must already be on GitHub (default: push)\n  -j, --jobs <N>   run up to N Checks at once (default: all Checks at once)\n  -V, --version    print the version\n  -h, --help       print this help\n\nExamples:\n  local-ci                 run after each commit\n  local-ci --force         re-run everything, e.g. to rule out a flaky pass\n  local-ci --no-push       the commit was already pushed some other way\n  local-ci --jobs 1        run Checks one at a time, e.g. if they conflict\n\nExit codes:\n  0  every Check passed or had already passed\n  1  a Check failed, or the Run could not start (see the error line)\n  2  unknown option or argument\n`;
 const safeEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '' };
 async function git(args, cwd = process.cwd()) {
-    return (await exec('git', args, { cwd, env: safeEnv })).stdout.trim();
+    return (await exec('git', args, { cwd, env: safeEnv })).stdout.trimEnd();
 }
 async function command(args, cwd = process.cwd()) { return exec(args[0], args.slice(1), { cwd, env: safeEnv }); }
 function parseArgs(argv) {
@@ -71,6 +71,8 @@ async function loadChecks() {
         throw new Error('error: local-ci.yml: checks must be a non-empty map');
     const checks = [];
     for (const [name, raw] of Object.entries(entries)) {
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.includes('..'))
+            throw new Error(`error: local-ci.yml: check "${name}" has invalid name; use letters, numbers, ., _, or -`);
         const objectValue = typeof raw === 'object' && raw !== null ? raw : undefined;
         const checkCommand = typeof raw === 'string' ? raw : objectValue?.command;
         if (typeof checkCommand !== 'string' || checkCommand.trim() === '')
@@ -227,7 +229,8 @@ export async function main() {
             console.log(`full log: .git/local-ci/logs/${info.sha.slice(0, 7)}/${result.check.name}.log`);
         }
         let posted = 0;
-        let checkFailures = ran.filter((result) => result.status === 'failed').length;
+        const checkFailures = ran.filter((result) => result.status === 'failed').length;
+        let postFailures = 0;
         for (const result of ran) {
             const state = result.status === 'passed' ? 'success' : 'failure';
             const description = result.status === 'passed' ? `passed in ${result.duration}s` : `failed in ${result.duration}s (${result.timedOut ? 'timeout' : `exit ${result.code}`})`;
@@ -238,12 +241,12 @@ export async function main() {
             }
             catch {
                 console.error(`error: failed to post Commit Status ${context} to GitHub; run gh auth login, then local-ci`);
-                checkFailures += 1;
+                postFailures += 1;
             }
         }
         if (posted > 0)
             console.log(`\nposted ${posted} Commit Status${posted === 1 ? '' : 'es'} to ${info.sha.slice(0, 7)}; ${checkFailures ? `${checkFailures} of ${info.checks.length} Checks failed` : `all ${info.checks.length} Checks passed`}`);
-        if (checkFailures)
+        if (checkFailures || postFailures)
             process.exitCode = 1;
     }
     catch (error) {
