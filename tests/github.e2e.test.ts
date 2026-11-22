@@ -110,6 +110,25 @@ function statusCount(sha: string, context: string): number {
 		),
 	);
 }
+// The statuses endpoints are eventually consistent: a POST can succeed and
+// still be missing from the reads for roughly a second (measured: second
+// post to an existing context lagged in 3 of 40 probes). Poll instead of
+// asserting on the first read; on timeout the stale value fails the
+// assertion with a meaningful diff.
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+async function eventually<T>(
+	read: () => T,
+	isReady: (value: T) => boolean,
+	ms = 15000,
+): Promise<T> {
+	let value = read();
+	const deadline = Date.now() + ms;
+	while (!isReady(value) && Date.now() < deadline) {
+		await sleep(500);
+		value = read();
+	}
+	return value;
+}
 
 afterAll(() => {
 	for (const { dir, branch } of pushed) {
@@ -144,7 +163,15 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 			dir,
 		);
 		expect(head.startsWith(sha)).toBe(true);
-		let statuses = latestStatuses(sha);
+		const contexts = [
+			"local-ci/fail",
+			"local-ci/pass",
+			"local-ci/slow",
+		] as const;
+		let statuses = await eventually(
+			() => latestStatuses(sha),
+			(s) => contexts.every((context) => context in s),
+		);
 		expect(statuses["local-ci/pass"]).toMatch(/^success: passed in \d+s$/);
 		expect(statuses["local-ci/fail"]).toMatch(
 			/^failure: failed in \d+s \(exit 1\)$/,
@@ -163,7 +190,12 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 		expect(result.stdout).toContain(
 			`posted 2 Commit Statuses to ${short}; 2 of 3 Checks failed`,
 		);
-		expect(statusCount(sha, "local-ci/pass")).toBe(1);
+		expect(
+			await eventually(
+				() => statusCount(sha, "local-ci/pass"),
+				(count) => count === 1,
+			),
+		).toBe(1);
 
 		result = localCi(dir, ["--force", "--no-push"]);
 		if (result.status !== 1)
@@ -172,8 +204,16 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 		expect(result.stdout).toContain(
 			`posted 3 Commit Statuses to ${short}; 2 of 3 Checks failed`,
 		);
-		expect(statusCount(sha, "local-ci/pass")).toBe(2);
-		statuses = latestStatuses(sha);
+		expect(
+			await eventually(
+				() => statusCount(sha, "local-ci/pass"),
+				(count) => count === 2,
+			),
+		).toBe(2);
+		statuses = await eventually(
+			() => latestStatuses(sha),
+			(s) => contexts.every((context) => context in s),
+		);
 		expect(Object.keys(statuses).sort()).toEqual([
 			"local-ci/fail",
 			"local-ci/pass",
