@@ -1,8 +1,8 @@
 timeout: 60
 checks:
-  lint: bun run lint
-  typecheck: bun run typecheck
+  lint: pnpm lint
+  typecheck: pnpm typecheck
   unit:
-    command: bun test
+    command: vitest run
     timeout: 300
-  build: bun run build
+  build: pnpm build

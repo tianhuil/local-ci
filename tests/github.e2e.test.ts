@@ -1,12 +1,12 @@
-// End-to-end: real git push and real Commit Statuses on this GitHub repo.
-// Opt in with LOCAL_CI_E2E=1 (`bun run test:e2e`). Needs a gh login (or
-// GH_TOKEN) that can push branches and write statuses to the repo.
-import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// End-to-end: real git push and real Commit Statuses on this GitHub repo.
+// Opt in with LOCAL_CI_E2E=1 (`pnpm test:e2e`). Needs a gh login (or
+// GH_TOKEN) that can push branches and write statuses to the repo.
+import { afterAll, describe, expect, test } from "vitest";
 
 const BIN = join(process.cwd(), "bin/local-ci.js");
 // Seconds before the `slow` Check is killed. Short, because the test only
@@ -123,6 +123,7 @@ afterAll(() => {
 describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 	test(
 		"pushes the branch, posts real Commit Statuses, skips passed Checks, and --force reposts",
+		{ timeout: 180000 },
 		async () => {
 			const { dir, branch } = await makeRepo();
 			const sha = run("git", ["rev-parse", "HEAD"], dir);
@@ -138,9 +139,12 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 			expect(result.stdout).toContain(
 				`posted 3 Commit Statuses to ${short}; 2 of 3 Checks failed`,
 			);
-			expect(
-				run("git", ["ls-remote", "origin", `refs/heads/${branch}`], dir),
-			).toStartWith(sha);
+			const head = run(
+				"git",
+				["ls-remote", "origin", `refs/heads/${branch}`],
+				dir,
+			);
+			expect(head.startsWith(sha)).toBe(true);
 			let statuses = latestStatuses(sha);
 			expect(statuses["local-ci/pass"]).toMatch(/^success: passed in \d+s$/);
 			expect(statuses["local-ci/fail"]).toMatch(
@@ -177,6 +181,5 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 				"local-ci/slow",
 			]);
 		},
-		{ timeout: 180000 },
 	);
 });

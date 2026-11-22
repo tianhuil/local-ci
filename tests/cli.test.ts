@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, expect, test } from "vitest";
 import { resolveGitDir, runCheck } from "../src/index";
 
 const BIN = join(process.cwd(), "bin/local-ci.js");
@@ -18,7 +19,7 @@ function git(args: string[], cwd: string, env?: NodeJS.ProcessEnv) {
 }
 async function fakeGh(dir: string) {
 	const fakeBin = await mkdtemp(join(tmpdir(), "local-ci-gh-"));
-	await Bun.write(
+	await writeFile(
 		join(fakeBin, "gh"),
 		`#!/bin/sh
 if [ -n "${"${GH_ENV_LOG:-}"}" ]; then printf '%s|%s\n' "$GIT_TERMINAL_PROMPT" "$GIT_ASKPASS" >> "$GH_ENV_LOG"; fi
@@ -83,7 +84,7 @@ exec ${REAL_GIT} "$@"
 printf '%s|%s\n' "$GIT_TERMINAL_PROMPT" "$GIT_ASKPASS" >> "$GIT_ENV_LOG"
 exec ${REAL_GIT} "$@"
 `;
-	await Bun.write(shim, body);
+	await writeFile(shim, body);
 	await chmod(shim, 0o755);
 	return shim;
 }
@@ -167,7 +168,7 @@ describe("local-ci CLI contract", () => {
 		expect(result.stderr.trim()).toBe(
 			'error: local-ci.yml: check "../../victim" has invalid name; use letters, numbers, ., _, or -',
 		);
-		expect(await Bun.file(join(repo.dir, "..", "victim")).exists()).toBe(false);
+		expect(existsSync(join(repo.dir, "..", "victim"))).toBe(false);
 	});
 
 	test("reports missing token and invalid configuration exactly", async () => {
@@ -181,7 +182,7 @@ describe("local-ci CLI contract", () => {
 		result = runCli(invalid);
 		expect(result.status).toBe(1);
 		expect(result.stderr.trim()).toBe(
-			'error: local-ci.yml: check "unit" has no command; add one, e.g. unit: bun test',
+			'error: local-ci.yml: check "unit" has no command; add one, e.g. unit: pnpm test',
 		);
 	});
 
@@ -218,7 +219,7 @@ describe("local-ci CLI contract", () => {
 		);
 		const credentials = await makeRepo();
 		const shim = join(credentials.fakeBin, "git");
-		await Bun.write(
+		await writeFile(
 			shim,
 			`#!/bin/sh
 case " $* " in *" push "*) echo "fatal: could not read Username for 'https://github.com'" >&2; exit 128;; esac
@@ -354,7 +355,7 @@ exec ${REAL_GIT} "$@"
 		const result = runCli(repo, ["--no-push"], { NO_PUSH_LOG: pushLog });
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("posted 1 Commit Status to");
-		expect(await Bun.file(pushLog).exists()).toBe(false);
+		expect(existsSync(pushLog)).toBe(false);
 	});
 
 	test("passes noninteractive git and gh environment variables", async () => {
@@ -424,9 +425,9 @@ exec ${REAL_GIT} "$@"
 		expect(result.status).toBe(0);
 		const gitDir = await resolveGitDir(linked);
 		expect(
-			await Bun.file(
+			existsSync(
 				join(gitDir, "local-ci", "logs", root.sha.slice(0, 7), "unit.log"),
-			).exists(),
+			),
 		).toBe(true);
 	});
 });
