@@ -5,15 +5,15 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import { describe, test } from "vitest";
 import {
-	DEFAULTS,
-	type ReleaseConfig,
-	ReleaseError,
-	type Run,
 	binPaths,
 	buildProgram,
+	DEFAULTS,
 	detectPackageManager,
 	findUnpackedFiles,
 	parseConfigFile,
+	type ReleaseConfig,
+	ReleaseError,
+	type Run,
 	stripLifecycleScripts,
 } from "./release.mts";
 

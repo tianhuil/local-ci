@@ -57,14 +57,14 @@ Each run: verify the working tree is clean, push the current branch, run every C
 Checks are declared in `local-ci.yml` at the repository root:
 
 ```yaml
-timeout: 60          # seconds per Check; default 60
+timeout: 60 # seconds per Check; default 60
 checks:
   lint: pnpm lint
   typecheck: pnpm typecheck
   unit: vitest run
   build:
-    command: act -j build   # run a GitHub Actions job locally; needs Docker
-    timeout: 300            # overrides the top-level timeout
+    command: act -j build # run a GitHub Actions job locally; needs Docker
+    timeout: 300 # overrides the top-level timeout
 ```
 
 Key design choices, one line each:

@@ -43,7 +43,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        how: [npm-global, pnpm-global, bun-global, yarn1-global, npx, pnpm-dlx, bunx]
+        how:
+          [
+            npm-global,
+            pnpm-global,
+            bun-global,
+            yarn1-global,
+            npx,
+            pnpm-dlx,
+            bunx,
+          ]
         ref: [tag, release]
     env:
       SPEC: github:${{ github.repository }}#${{ matrix.ref == 'tag' && needs.release.outputs.tag || 'release' }}

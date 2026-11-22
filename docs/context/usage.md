@@ -27,14 +27,14 @@ The Runner needs `git` and `gh` on PATH. Checks run in the Author's normal shell
 `local-ci.yml` at the repository root maps each Check name to a shell command. Each name becomes the Commit Status `local-ci/<name>`.
 
 ```yaml
-timeout: 60             # seconds one Check may run; optional; default 60
+timeout: 60 # seconds one Check may run; optional; default 60
 checks:
   lint: pnpm lint
   typecheck: pnpm typecheck
   unit: vitest run
   build:
-    command: act -j build   # runs a GitHub Actions job locally; needs Docker
-    timeout: 300            # optional; overrides the top-level timeout
+    command: act -j build # runs a GitHub Actions job locally; needs Docker
+    timeout: 300 # optional; overrides the top-level timeout
 ```
 
 A Check maps to either a command string or an object with a `command` and an optional `timeout` in seconds. A Check that exceeds its timeout is killed and fails; its line shows `timeout` in place of an exit code.
@@ -135,18 +135,18 @@ feature/login already up to date on origin (8d41e07)
 
 Each error is one line naming what failed, followed by the command that fixes it. Nothing is pushed, run, or posted when the Runner refuses to start.
 
-| Situation | Error | Exit |
-| --- | --- | --- |
-| Not a Clean Tree | `error: 2 uncommitted changes (src/login.ts, notes.txt); run git commit or git stash, then local-ci` | 1 |
-| On the default branch | `error: on default branch main; run git switch -c <branch>, then local-ci` | 1 |
-| Push rejected | `error: push of feature/login rejected, origin has newer commits; run git pull --rebase, then local-ci` | 1 |
-| Push needs credentials | `error: push to origin needs credentials; run gh auth setup-git, then local-ci` | 1 |
-| `--no-push`, commit not on GitHub | `error: 3f9c2ab is not on GitHub; run local-ci without --no-push` | 1 |
-| No GitHub token | `error: no GitHub token; run gh auth login, then local-ci` | 1 |
-| Invalid `local-ci.yml` | `error: local-ci.yml: check "unit" has no command; add one, e.g. unit: pnpm test` | 1 |
-| Unknown option | `error: unknown option --forse; valid options: --force, --no-push, --jobs, --help, --version` | 2 |
-| Invalid `--jobs` value | `error: invalid value "0" for --jobs; use a positive integer, such as --jobs 4` | 2 |
-| Extra argument | `error: unexpected argument "unit"; local-ci takes no arguments` | 2 |
+| Situation                         | Error                                                                                                   | Exit |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------- | ---- |
+| Not a Clean Tree                  | `error: 2 uncommitted changes (src/login.ts, notes.txt); run git commit or git stash, then local-ci`    | 1    |
+| On the default branch             | `error: on default branch main; run git switch -c <branch>, then local-ci`                              | 1    |
+| Push rejected                     | `error: push of feature/login rejected, origin has newer commits; run git pull --rebase, then local-ci` | 1    |
+| Push needs credentials            | `error: push to origin needs credentials; run gh auth setup-git, then local-ci`                         | 1    |
+| `--no-push`, commit not on GitHub | `error: 3f9c2ab is not on GitHub; run local-ci without --no-push`                                       | 1    |
+| No GitHub token                   | `error: no GitHub token; run gh auth login, then local-ci`                                              | 1    |
+| Invalid `local-ci.yml`            | `error: local-ci.yml: check "unit" has no command; add one, e.g. unit: pnpm test`                       | 1    |
+| Unknown option                    | `error: unknown option --forse; valid options: --force, --no-push, --jobs, --help, --version`           | 2    |
+| Invalid `--jobs` value            | `error: invalid value "0" for --jobs; use a positive integer, such as --jobs 4`                         | 2    |
+| Extra argument                    | `error: unexpected argument "unit"; local-ci takes no arguments`                                        | 2    |
 
 The Runner never force-pushes. A rejected push is the Author's to resolve.
 
@@ -156,11 +156,11 @@ No PR is needed. Commit Statuses attach to the commit and appear once a PR is op
 
 ## Exit codes
 
-| Code | Meaning |
-| --- | --- |
-| `0` | Every Check passed, or was skipped as already passed. |
-| `1` | A Check failed, or the Run could not start. The output says which. |
-| `2` | Unknown option or extra argument. Nothing ran. |
+| Code | Meaning                                                            |
+| ---- | ------------------------------------------------------------------ |
+| `0`  | Every Check passed, or was skipped as already passed.              |
+| `1`  | A Check failed, or the Run could not start. The output says which. |
+| `2`  | Unknown option or extra argument. Nothing ran.                     |
 
 ---
 
