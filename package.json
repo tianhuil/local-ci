@@ -5,13 +5,16 @@
 	"license": "MIT",
 	"type": "module",
 	"packageManager": "pnpm@10.15.0",
+	"engines": {
+		"node": ">=18"
+	},
 	"bin": {
 		"local-ci": "bin/local-ci.js"
 	},
 	"files": ["bin", "dist"],
 	"scripts": {
 		"lint": "biome check .",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
 		"test": "vitest run",
 		"test:e2e": "pnpm build && LOCAL_CI_E2E=1 vitest run tests/github.e2e.test.ts",
 		"build": "tsc",
