@@ -1,4 +1,3 @@
-import { describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
 	chmod,
@@ -10,6 +9,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, expect, test } from "vitest";
 
 const git = (args: string[], cwd: string) =>
 	execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -31,7 +31,7 @@ async function releaseRepo() {
 	git(["config", "user.name", "Test"], root);
 	for (const file of [
 		"package.json",
-		"bun.lock",
+		"pnpm-lock.yaml",
 		"tsconfig.json",
 		".gitignore",
 		"biome.json",
@@ -154,7 +154,7 @@ describe("release flow", () => {
 				repo.remote,
 				bumpedCheckout,
 			]);
-			execFileSync("bun", ["install", "--frozen-lockfile", "--production"], {
+			execFileSync("pnpm", ["install", "--frozen-lockfile", "--prod"], {
 				cwd: bumpedCheckout,
 			});
 			const bumpedInstalled = spawnSync(
@@ -176,7 +176,7 @@ describe("release flow", () => {
 				repo.remote,
 				checkout,
 			]);
-			execFileSync("bun", ["install", "--frozen-lockfile", "--production"], {
+			execFileSync("pnpm", ["install", "--frozen-lockfile", "--prod"], {
 				cwd: checkout,
 			});
 			const installed = spawnSync(
@@ -196,7 +196,7 @@ describe("release flow", () => {
 				["-c", `git archive ${release} | tar -x -C ${archive}`],
 				{ cwd: repo.root },
 			);
-			execFileSync("bun", ["install", "--frozen-lockfile", "--production"], {
+			execFileSync("pnpm", ["install", "--frozen-lockfile", "--prod"], {
 				cwd: archive,
 			});
 			const archived = spawnSync(
@@ -214,7 +214,7 @@ describe("release flow", () => {
 		{ timeout: 120000 },
 		async () => {
 			const repo = await releaseRepo();
-			const result = spawnSync("bun", ["run", "verify"], {
+			const result = spawnSync("pnpm", ["run", "verify"], {
 				cwd: repo.root,
 				env: releaseEnv(),
 				encoding: "utf8",
@@ -489,7 +489,7 @@ exit 2
 			});
 			expect(result.status).toBe(0);
 			const tarball = result.stdout.trim();
-			expect(tarball).toEndWith(".tgz");
+			expect(tarball.endsWith(".tgz")).toBe(true);
 			const packageText = execFileSync(
 				"tar",
 				["-xOf", tarball, "package/package.json"],
@@ -501,7 +501,7 @@ exit 2
 				scripts?: Record<string, string>;
 			};
 			expect(packed.scripts?.build).toBeUndefined();
-			expect(packed.scripts?.test).toBe("bun test");
+			expect(packed.scripts?.test).toBe("vitest run");
 			const installDir = await mkdtemp(
 				join(tmpdir(), "local-ci-pack-install-"),
 			);

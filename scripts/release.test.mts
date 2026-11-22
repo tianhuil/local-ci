@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, test } from "node:test";
 import type { Command } from "commander";
+import { describe, test } from "vitest";
 import {
 	DEFAULTS,
 	type ReleaseConfig,

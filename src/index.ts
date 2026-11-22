@@ -131,7 +131,7 @@ async function loadChecks(): Promise<{ checks: Check[] }> {
 		const checkCommand = typeof raw === "string" ? raw : objectValue?.command;
 		if (typeof checkCommand !== "string" || checkCommand.trim() === "")
 			throw new Error(
-				`error: local-ci.yml: check "${name}" has no command; add one, e.g. ${name}: bun test`,
+				`error: local-ci.yml: check "${name}" has no command; add one, e.g. ${name}: pnpm test`,
 			);
 		const checkTimeout =
 			objectValue?.timeout === undefined ? timeout : objectValue.timeout;

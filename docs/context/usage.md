@@ -12,8 +12,8 @@ $ local-ci
 ## Install
 
 ```console
-$ bun install --global github:tianhuil/local-ci#v0.1.0
-$ bun install --global github:tianhuil/local-ci#release
+$ pnpm add --global github:tianhuil/local-ci#v0.1.0
+$ pnpm add --global github:tianhuil/local-ci#release
 ```
 
 Install a newer tag to upgrade. `main` carries source only, so installs come from the `release` branch tags.
@@ -29,9 +29,9 @@ The Runner needs `git` and `gh` on PATH. Checks run in the Author's normal shell
 ```yaml
 timeout: 60             # seconds one Check may run; optional; default 60
 checks:
-  lint: bun run lint
-  typecheck: bun run typecheck
-  unit: bun test
+  lint: pnpm lint
+  typecheck: pnpm typecheck
+  unit: vitest run
   build:
     command: act -j build   # runs a GitHub Actions job locally; needs Docker
     timeout: 300            # optional; overrides the top-level timeout
@@ -143,7 +143,7 @@ Each error is one line naming what failed, followed by the command that fixes it
 | Push needs credentials | `error: push to origin needs credentials; run gh auth setup-git, then local-ci` | 1 |
 | `--no-push`, commit not on GitHub | `error: 3f9c2ab is not on GitHub; run local-ci without --no-push` | 1 |
 | No GitHub token | `error: no GitHub token; run gh auth login, then local-ci` | 1 |
-| Invalid `local-ci.yml` | `error: local-ci.yml: check "unit" has no command; add one, e.g. unit: bun test` | 1 |
+| Invalid `local-ci.yml` | `error: local-ci.yml: check "unit" has no command; add one, e.g. unit: pnpm test` | 1 |
 | Unknown option | `error: unknown option --forse; valid options: --force, --no-push, --jobs, --help, --version` | 2 |
 | Invalid `--jobs` value | `error: invalid value "0" for --jobs; use a positive integer, such as --jobs 4` | 2 |
 | Extra argument | `error: unexpected argument "unit"; local-ci takes no arguments` | 2 |
