@@ -1,9 +1,8 @@
-import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
-import { describe, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
 	binPaths,
 	buildProgram,
@@ -21,78 +20,59 @@ describe("stripLifecycleScripts", () => {
 	test("drops install-time scripts, keeps the rest and the indentation", () => {
 		const raw =
 			'{\n\t"name": "x",\n\t"scripts": {\n\t\t"build": "tsc",\n\t\t"prepare": "tsc",\n\t\t"test": "node --test"\n\t}\n}\n';
-		assert.equal(
-			stripLifecycleScripts(raw),
+		expect(stripLifecycleScripts(raw)).toBe(
 			'{\n\t"name": "x",\n\t"scripts": {\n\t\t"test": "node --test"\n\t}\n}\n',
 		);
 	});
 
 	test('removes "scripts" once it is empty', () => {
-		assert.equal(
+		expect(
 			stripLifecycleScripts('{"name":"x","scripts":{"build":"tsc"}}'),
-			'{\n  "name": "x"\n}\n',
-		);
+		).toBe('{\n  "name": "x"\n}\n');
 	});
 });
 
 test("findUnpackedFiles lists built files the pack left out", () => {
-	assert.deepEqual(
+	expect(
 		findUnpackedFiles(["bin/x.js", "package.json"], ["dist/a.js", "bin/x.js"]),
-		["dist/a.js"],
-	);
-	assert.deepEqual(findUnpackedFiles(["dist/a.js"], ["dist/a.js"]), []);
+	).toEqual(["dist/a.js"]);
+	expect(findUnpackedFiles(["dist/a.js"], ["dist/a.js"])).toEqual([]);
 });
 
 test("detectPackageManager reads the lockfile", () => {
-	assert.equal(
-		detectPackageManager((f) => f === "pnpm-lock.yaml"),
-		"pnpm",
-	);
-	assert.equal(
-		detectPackageManager((f) => f === "bun.lock"),
-		"bun",
-	);
-	assert.equal(
-		detectPackageManager((f) => f === "yarn.lock"),
-		"yarn",
-	);
-	assert.equal(
-		detectPackageManager(() => false),
-		"npm",
-	);
+	expect(detectPackageManager((f) => f === "pnpm-lock.yaml")).toBe("pnpm");
+	expect(detectPackageManager((f) => f === "bun.lock")).toBe("bun");
+	expect(detectPackageManager((f) => f === "yarn.lock")).toBe("yarn");
+	expect(detectPackageManager(() => false)).toBe("npm");
 });
 
 test("binPaths normalizes string and object forms", () => {
-	assert.deepEqual(binPaths({ bin: "./dist/cli.js" }), ["dist/cli.js"]);
-	assert.deepEqual(binPaths({ bin: { a: "dist/a.js", b: "./dist/b.js" } }), [
+	expect(binPaths({ bin: "./dist/cli.js" })).toEqual(["dist/cli.js"]);
+	expect(binPaths({ bin: { a: "dist/a.js", b: "./dist/b.js" } })).toEqual([
 		"dist/a.js",
 		"dist/b.js",
 	]);
-	assert.throws(() => binPaths({}), ReleaseError);
+	expect(() => binPaths({})).toThrow(ReleaseError);
 });
 
 describe("parseConfigFile", () => {
 	test("accepts known keys", () => {
-		assert.deepEqual(
+		expect(
 			parseConfigFile('{"distDir":"out","githubRelease":false}', "c.json"),
-			{
-				distDir: "out",
-				githubRelease: false,
-			},
-		);
+		).toEqual({
+			distDir: "out",
+			githubRelease: false,
+		});
 	});
 
 	test("rejects unknown keys and wrong types", () => {
-		assert.throws(
-			() => parseConfigFile('{"dist":"out"}', "c.json"),
+		expect(() => parseConfigFile('{"dist":"out"}', "c.json")).toThrow(
 			/unknown key "dist"/,
 		);
-		assert.throws(
-			() => parseConfigFile('{"distDir":1}', "c.json"),
+		expect(() => parseConfigFile('{"distDir":1}', "c.json")).toThrow(
 			/"distDir" must be a string/,
 		);
-		assert.throws(
-			() => parseConfigFile("[]", "c.json"),
+		expect(() => parseConfigFile("[]", "c.json")).toThrow(
 			/expected a JSON object/,
 		);
 	});
@@ -115,17 +95,16 @@ describe("buildProgram", () => {
 				.configureOutput({ writeErr: () => {}, writeOut: () => {} });
 		}
 		program.parse(args, { from: "user" });
-		assert.ok(seen, "action did not run");
+		if (!seen) throw new Error("action did not run");
 		return seen;
 	};
 
 	test("defaults apply when there are no flags and no release.config.json", () => {
-		assert.deepEqual(parse(["check"]).config, DEFAULTS);
+		expect(parse(["check"]).config).toEqual(DEFAULTS);
 	});
 
 	test("a missing --config file is an error", () => {
-		assert.throws(
-			() => parse(["--config", "missing.json", "check"]),
+		expect(() => parse(["--config", "missing.json", "check"])).toThrow(
 			/missing\.json not found/,
 		);
 	});
@@ -148,8 +127,8 @@ describe("buildProgram", () => {
 			"build",
 			"publish",
 		]);
-		assert.equal(mode, "publish");
-		assert.deepEqual(resolved, {
+		expect(mode).toBe("publish");
+		expect(resolved).toEqual({
 			...DEFAULTS,
 			distDir: "build",
 			tagPrefix: "release-",
@@ -158,16 +137,19 @@ describe("buildProgram", () => {
 	});
 
 	test("--no-github-release and --install reach the action", () => {
-		assert.equal(
-			parse(["publish", "--no-github-release"]).config.githubRelease,
+		expect(parse(["publish", "--no-github-release"]).config.githubRelease).toBe(
 			false,
 		);
-		assert.equal(parse(["pack", "--install"]).install, true);
+		expect(parse(["pack", "--install"]).install).toBe(true);
 	});
 
 	test("rejects flags on the wrong command", () => {
-		assert.throws(() => parse(["publish", "--install"]), {
-			code: "commander.unknownOption",
-		});
+		let code: string | undefined;
+		try {
+			parse(["publish", "--install"]);
+		} catch (error) {
+			code = (error as NodeJS.ErrnoException).code;
+		}
+		expect(code).toBe("commander.unknownOption");
 	});
 });
