@@ -12,6 +12,7 @@
 		"lint": "biome check .",
 		"typecheck": "tsc --noEmit",
 		"test": "bun test",
+		"test:e2e": "bun run build && LOCAL_CI_E2E=1 bun test ./tests/github.e2e.test.ts",
 		"build": "tsc",
 		"release": "node scripts/release.mts",
 		"verify": "bun run lint && bun run typecheck && bun run build && bun test"
