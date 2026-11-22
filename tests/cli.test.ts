@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { resolveGitDir, runCheck } from "../src/index";
+import { resolveGitDir, runCheck } from "../src/index.ts";
 
 const BIN = join(process.cwd(), "bin/local-ci.js");
 const REAL_GIT = execFileSync("which", ["git"], { encoding: "utf8" }).trim();

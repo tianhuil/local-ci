@@ -14,7 +14,7 @@ import { describe, expect, test } from "vitest";
 const git = (args: string[], cwd: string) =>
 	execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
-const releaseEnv = (path?: string) => {
+const releaseEnv = (path?: string): NodeJS.ProcessEnv => {
 	const { GH_TOKEN, GITHUB_TOKEN, ...env } = process.env;
 	return { ...env, ...(path ? { PATH: path } : {}) };
 };
@@ -33,6 +33,7 @@ async function releaseRepo() {
 		"package.json",
 		"pnpm-lock.yaml",
 		"tsconfig.json",
+		"tsconfig.test.json",
 		".gitignore",
 		"biome.json",
 		"local-ci.yml",
