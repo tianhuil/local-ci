@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { resolveGitDir, runCheck } from "../src/index.ts";
+import { resolveGitDir } from "../src/index.ts";
 
 const BIN = join(process.cwd(), "bin/local-ci.js");
 const REAL_GIT = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
@@ -17,7 +17,7 @@ function git(args: string[], cwd: string, env?: NodeJS.ProcessEnv) {
 		encoding: "utf8",
 	}).trim();
 }
-async function fakeGh(dir: string) {
+async function fakeGh() {
 	const fakeBin = await mkdtemp(join(tmpdir(), "local-ci-gh-"));
 	await writeFile(
 		join(fakeBin, "gh"),
@@ -60,7 +60,7 @@ async function makeRepo(
 	git(["add", "."], dir);
 	git(["commit", "-qm", "initial"], dir);
 	git(["remote", "add", "origin", remote], dir);
-	const fakeBin = await fakeGh(dir);
+	const fakeBin = await fakeGh();
 	return { dir, remote, sha: git(["rev-parse", "HEAD"], dir), fakeBin };
 }
 function runCli(repo: Repo, args: string[] = [], env: NodeJS.ProcessEnv = {}) {

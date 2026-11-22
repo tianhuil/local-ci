@@ -121,65 +121,63 @@ afterAll(() => {
 });
 
 describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
-	test(
-		"pushes the branch, posts real Commit Statuses, skips passed Checks, and --force reposts",
-		{ timeout: 180000 },
-		async () => {
-			const { dir, branch } = await makeRepo();
-			const sha = run("git", ["rev-parse", "HEAD"], dir);
-			const short = sha.slice(0, 7);
+	test("pushes the branch, posts real Commit Statuses, skips passed Checks, and --force reposts", {
+		timeout: 180000,
+	}, async () => {
+		const { dir, branch } = await makeRepo();
+		const sha = run("git", ["rev-parse", "HEAD"], dir);
+		const short = sha.slice(0, 7);
 
-			let result = localCi(dir);
-			if (result.status !== 1)
-				throw new Error(`first run: ${result.stderr}\n${result.stdout}`);
-			expect(result.stderr).toContain(`pushed ${branch} to origin (${short})`);
-			expect(result.stdout).toMatch(/^pass +passed +\d+s$/m);
-			expect(result.stdout).toMatch(/^fail +failed +\d+s +exit 1$/m);
-			expect(result.stdout).toMatch(/^slow +failed +\d+s +timeout$/m);
-			expect(result.stdout).toContain(
-				`posted 3 Commit Statuses to ${short}; 2 of 3 Checks failed`,
-			);
-			const head = run(
-				"git",
-				["ls-remote", "origin", `refs/heads/${branch}`],
-				dir,
-			);
-			expect(head.startsWith(sha)).toBe(true);
-			let statuses = latestStatuses(sha);
-			expect(statuses["local-ci/pass"]).toMatch(/^success: passed in \d+s$/);
-			expect(statuses["local-ci/fail"]).toMatch(
-				/^failure: failed in \d+s \(exit 1\)$/,
-			);
-			expect(statuses["local-ci/slow"]).toMatch(
-				/^failure: failed in \d+s \(timeout\)$/,
-			);
+		let result = localCi(dir);
+		if (result.status !== 1)
+			throw new Error(`first run: ${result.stderr}\n${result.stdout}`);
+		expect(result.stderr).toContain(`pushed ${branch} to origin (${short})`);
+		expect(result.stdout).toMatch(/^pass +passed +\d+s$/m);
+		expect(result.stdout).toMatch(/^fail +failed +\d+s +exit 1$/m);
+		expect(result.stdout).toMatch(/^slow +failed +\d+s +timeout$/m);
+		expect(result.stdout).toContain(
+			`posted 3 Commit Statuses to ${short}; 2 of 3 Checks failed`,
+		);
+		const head = run(
+			"git",
+			["ls-remote", "origin", `refs/heads/${branch}`],
+			dir,
+		);
+		expect(head.startsWith(sha)).toBe(true);
+		let statuses = latestStatuses(sha);
+		expect(statuses["local-ci/pass"]).toMatch(/^success: passed in \d+s$/);
+		expect(statuses["local-ci/fail"]).toMatch(
+			/^failure: failed in \d+s \(exit 1\)$/,
+		);
+		expect(statuses["local-ci/slow"]).toMatch(
+			/^failure: failed in \d+s \(timeout\)$/,
+		);
 
-			result = localCi(dir);
-			if (result.status !== 1)
-				throw new Error(`rerun: ${result.stderr}\n${result.stdout}`);
-			expect(result.stderr).toContain(
-				`${branch} already up to date on origin (${short})`,
-			);
-			expect(result.stdout).toMatch(/^pass +skipped +already passed$/m);
-			expect(result.stdout).toContain(
-				`posted 2 Commit Statuses to ${short}; 2 of 3 Checks failed`,
-			);
-			expect(statusCount(sha, "local-ci/pass")).toBe(1);
+		result = localCi(dir);
+		if (result.status !== 1)
+			throw new Error(`rerun: ${result.stderr}\n${result.stdout}`);
+		expect(result.stderr).toContain(
+			`${branch} already up to date on origin (${short})`,
+		);
+		expect(result.stdout).toMatch(/^pass +skipped +already passed$/m);
+		expect(result.stdout).toContain(
+			`posted 2 Commit Statuses to ${short}; 2 of 3 Checks failed`,
+		);
+		expect(statusCount(sha, "local-ci/pass")).toBe(1);
 
-			result = localCi(dir, ["--force", "--no-push"]);
-			if (result.status !== 1)
-				throw new Error(`force: ${result.stderr}\n${result.stdout}`);
-			expect(result.stdout).toMatch(/^pass +passed +\d+s$/m);
-			expect(result.stdout).toContain(
-				`posted 3 Commit Statuses to ${short}; 2 of 3 Checks failed`,
-			);
-			expect(statusCount(sha, "local-ci/pass")).toBe(2);
-			statuses = latestStatuses(sha);
-			expect(Object.keys(statuses).sort()).toEqual([
-				"local-ci/fail",
-				"local-ci/pass",
-				"local-ci/slow",
-			]);
-		},
-	);
+		result = localCi(dir, ["--force", "--no-push"]);
+		if (result.status !== 1)
+			throw new Error(`force: ${result.stderr}\n${result.stdout}`);
+		expect(result.stdout).toMatch(/^pass +passed +\d+s$/m);
+		expect(result.stdout).toContain(
+			`posted 3 Commit Statuses to ${short}; 2 of 3 Checks failed`,
+		);
+		expect(statusCount(sha, "local-ci/pass")).toBe(2);
+		statuses = latestStatuses(sha);
+		expect(Object.keys(statuses).sort()).toEqual([
+			"local-ci/fail",
+			"local-ci/pass",
+			"local-ci/slow",
+		]);
+	});
 });
