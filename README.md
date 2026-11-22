@@ -77,6 +77,20 @@ Key design choices, one line each:
 
 Full behavior — every option, the error table, exit codes — is specified in the [usage contract](docs/context/usage.md); the reasoning behind the architecture is in the [context doc](docs/context/base.md) and [ADRs](docs/adr/).
 
+## Architecture
+
+```text
+src/
+  index.ts    the Run: preflight, push, execute Checks, post, report
+  cli.ts      argument parsing, --help/--version, exit code 2
+  config.ts   local-ci.yml loading and validation
+  git.ts      git queries, the never-force push
+  github.ts   Commit Status reads and writes through gh
+  checks.ts   one Check's execution: spawn, capture, timeout, kill
+  report.ts   stdout shapes: per-Check lines, failure previews
+  proc.ts     noninteractive git/gh process helpers
+```
+
 ## Development
 
 ```sh
