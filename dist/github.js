@@ -4,6 +4,11 @@ import { command } from "./proc.js";
 // exit an interrupt already requested.
 const POST_TIMEOUT_MS = 10_000;
 function statusFor(result) {
+    if (result.status === "blocked")
+        return {
+            state: "failure",
+            description: `not run; depends on ${(result.blockedOn ?? []).join(", ")}`,
+        };
     const state = result.status === "passed" ? "success" : "failure";
     const description = result.status === "passed"
         ? `passed in ${result.duration}s`
@@ -137,7 +142,7 @@ export async function postResults(results, sha, totalSelected) {
             failures += 1;
         }
     }
-    const checkFailures = results.filter((result) => result.status === "failed").length;
+    const checkFailures = results.filter((result) => result.status === "failed" || result.status === "blocked").length;
     if (posted > 0) {
         console.log(`\nposted ${posted} Commit Status${posted === 1 ? "" : "es"} to ${sha.slice(0, 7)}; ${checkFailures ? `${checkFailures} of ${totalSelected} Checks failed` : `all ${totalSelected} Checks passed`}`);
     }

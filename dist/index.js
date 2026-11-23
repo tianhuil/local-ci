@@ -2,7 +2,6 @@ import { appendFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
-import pMap from "p-map";
 import { runCheck, terminateRunningChecks } from "./checks.js";
 import { parseArgs, validateOnly } from "./cli.js";
 import { loadChecks } from "./config.js";
@@ -154,19 +153,180 @@ function installSignalHandlers(state) {
     process.on("SIGINT", onSignal);
     process.on("SIGTERM", onSignal);
 }
+// The selected closure: with --only, the named Checks plus every Check
+// they depend on, transitively — dependencies of selected Checks run even
+// when not named. Without it, every Check. Everything downstream —
+// skipping, pending, output, and the totals denominators — runs on the
+// selection.
+function selectClosure(checks, names) {
+    const byName = new Map(checks.map((check) => [check.name, check]));
+    const included = new Set();
+    const queue = [...names];
+    while (queue.length > 0) {
+        const name = queue.pop();
+        if (name === undefined || included.has(name) || !byName.has(name))
+            continue;
+        included.add(name);
+        for (const dep of byName.get(name)?.depends_on ?? [])
+            queue.push(dep);
+    }
+    return checks.filter((check) => included.has(check.name));
+}
+// Invariant 2 (the rerun rule): a selected Check that must run brings
+// every dependency with it, even one that already passed on this SHA —
+// its build output may not exist in this working tree. --force puts every
+// selected Check in the must-run set, so the same expansion covers it.
+function withDependencies(selected, mustRun) {
+    const byName = new Map(selected.map((check) => [check.name, check]));
+    const names = new Set(mustRun.map((check) => check.name));
+    const queue = [...names];
+    while (queue.length > 0) {
+        const check = byName.get(queue.pop() ?? "");
+        if (!check)
+            continue;
+        for (const dep of check.depends_on) {
+            if (names.has(dep))
+                continue;
+            names.add(dep);
+            queue.push(dep);
+        }
+    }
+    return names;
+}
+// The dependency scheduler. A Check starts once every dependency has
+// passed, never more than jobs run at once, and among ready Checks the one
+// first in local-ci.yml list order starts first. A Check becomes ready —
+// and announces its pending Commit Status — only when every dependency
+// passed, so blocked and skipped Checks never announce. A Check whose
+// dependency failed, timed out, or was blocked never runs: it is reported
+// blocked, naming every direct dependency that did not pass, in
+// depends_on order. An interrupt stops the loop: no un-started Check ever
+// spawns.
+async function runScheduled(toRun, state, jobs, root) {
+    const results = [];
+    let announceFailures = 0;
+    const byName = new Map(toRun.map((check) => [check.name, check]));
+    const passed = new Set();
+    const settled = new Set(); // passed, failed, or blocked
+    const announced = new Set();
+    const started = new Set();
+    const blocked = [];
+    const running = new Map();
+    let wake;
+    let progress = false;
+    const settleSignal = () => {
+        if (progress) {
+            progress = false;
+            return Promise.resolve();
+        }
+        return new Promise((resolve) => {
+            wake = resolve;
+        });
+    };
+    let idle = settleSignal();
+    const ready = (check) => check.depends_on.every((dep) => !byName.has(dep) || passed.has(dep));
+    while (true) {
+        if (state.interrupted)
+            break;
+        // Blocked first: a settled-but-not-passed dependency blocks its
+        // dependents without running them, transitively. The blocked names
+        // are finalized after the loop, when every dependency has settled.
+        for (const check of toRun) {
+            if (started.has(check.name) || settled.has(check.name))
+                continue;
+            const blocker = check.depends_on.some((dep) => settled.has(dep) && !passed.has(dep));
+            if (!blocker)
+                continue;
+            settled.add(check.name);
+            blocked.push(check);
+        }
+        // Announce every ready Check in list order before starting it.
+        for (const check of toRun) {
+            if (state.interrupted)
+                break;
+            if (announced.has(check.name) || settled.has(check.name) || !ready(check))
+                continue;
+            announced.add(check.name);
+            const announce = postPending([check], state.sha, (context) => state.pendingPosted.add(context), () => state.interrupted);
+            state.pendingDone = announce.then(() => undefined, () => undefined);
+            announceFailures += (await announce).failures;
+            // Start each Check immediately after its pending post. This keeps
+            // independent Checks parallel without serializing their execution on
+            // all pending-status posts, and lets an interrupt stop later posts.
+            if (!state.interrupted && running.size < jobs) {
+                started.add(check.name);
+                const done = runCheck(check, root).then((result) => {
+                    state.results.set(check.name, result);
+                    settled.add(check.name);
+                    if (result.status === "passed")
+                        passed.add(check.name);
+                    results.push(result);
+                    running.delete(check.name);
+                    if (wake) {
+                        const resolve = wake;
+                        wake = undefined;
+                        resolve();
+                    }
+                    else {
+                        progress = true;
+                    }
+                });
+                running.set(check.name, done);
+            }
+        }
+        if (state.interrupted)
+            break;
+        // Any ready Checks not announced above are started here when a slot
+        // remains (for example after a zero-job scheduler wakeup).
+        for (const check of toRun) {
+            if (running.size >= jobs)
+                break;
+            if (started.has(check.name) || settled.has(check.name) || !ready(check))
+                continue;
+            started.add(check.name);
+            const done = runCheck(check, root).then((result) => {
+                state.results.set(check.name, result);
+                settled.add(check.name);
+                if (result.status === "passed")
+                    passed.add(check.name);
+                results.push(result);
+                running.delete(check.name);
+                if (wake) {
+                    const resolve = wake;
+                    wake = undefined;
+                    resolve();
+                }
+                else {
+                    progress = true;
+                }
+            });
+            running.set(check.name, done);
+        }
+        if (running.size === 0)
+            break; // nothing running: all progress has settled (or deadlocked)
+        await idle;
+        idle = settleSignal();
+    }
+    for (const check of blocked) {
+        results.push({
+            check,
+            status: "blocked",
+            duration: 0,
+            blockedOn: check.depends_on.filter((dep) => !passed.has(dep)),
+        });
+    }
+    const order = new Map(toRun.map((check, i) => [check.name, i]));
+    results.sort((a, b) => (order.get(a.check.name) ?? 0) - (order.get(b.check.name) ?? 0));
+    return { results, announceFailures };
+}
 export async function main() {
     try {
         const options = parseArgs(process.argv.slice(2));
         const stopEarlySignals = installEarlySignalHandlers();
         const info = await preflight(options);
         validateOnly(options, info.checks);
-        // The selected closure: with --only, the named Checks (config order);
-        // without it, every Check. Everything downstream — skipping, pending,
-        // output, and the totals denominators — runs on the selection.
         const only = options.only ? new Set(options.only) : undefined;
-        const selected = only
-            ? info.checks.filter((check) => only.has(check.name))
-            : info.checks;
+        const selected = only ? selectClosure(info.checks, only) : info.checks;
         await push(info.branch, options.noPush, info.sha);
         // The stateful handler is installed before the early one is removed,
         // so no stretch — now or after future edits — runs on Node's default
@@ -186,29 +346,23 @@ export async function main() {
         recordSwap("early-removed");
         stopEarlySignals();
         const passed = await statuses(info.sha);
+        // Precedence, outermost first: --only selection (above) → the
+        // already-passed skip, bypassed by --force and by invariant 2's rerun
+        // rule → dependency blocking (inside runScheduled).
+        const mustRun = withDependencies(selected, selected.filter((check) => !passed.has(`local-ci/${check.name}`) || options.force));
         const skipped = selected
-            .filter((check) => passed.has(`local-ci/${check.name}`) && !options.force)
+            .filter((check) => !mustRun.has(check.name))
             .map((check) => ({ check, status: "skipped", duration: 0 }));
-        const pending = selected.filter((check) => !passed.has(`local-ci/${check.name}`) || options.force);
+        const pending = selected.filter((check) => mustRun.has(check.name));
         state.toRun = pending;
         const gitDir = await resolveGitDir();
         const logDir = join(gitDir, "local-ci", "logs", info.sha.slice(0, 7));
         await mkdir(logDir, { recursive: true });
-        const pendingPostsPromise = postPending(pending, info.sha, (context) => state.pendingPosted.add(context), () => state.interrupted);
-        state.pendingDone = pendingPostsPromise.then(() => undefined, () => undefined);
-        const pendingPosts = await pendingPostsPromise;
-        const ran = await pMap(pending, async (check) => {
-            // An interrupt stops the scheduler: an un-started Check never spawns.
-            if (state.interrupted)
-                return { check, status: "failed", duration: 0 };
-            const result = await runCheck(check, process.cwd());
-            state.results.set(check.name, result);
-            return result;
-        }, { concurrency: options.jobs ?? Number.POSITIVE_INFINITY });
+        const { results: ran, announceFailures } = await runScheduled(pending, state, options.jobs ?? Number.POSITIVE_INFINITY, process.cwd());
         if (state.interrupted)
             return; // the signal handler posts and exits 130
         state.phase = "posting";
-        for (const result of ran)
+        for (const result of ran.filter((item) => item.status !== "blocked"))
             await writeFile(join(logDir, `${result.check.name}.log`), result.log ?? "");
         const all = [...skipped, ...ran].sort((a, b) => info.checks.indexOf(a.check) - info.checks.indexOf(b.check));
         if (!ran.length) {
@@ -225,9 +379,9 @@ export async function main() {
         state.phase = "done";
         if (state.interrupted)
             process.exit(130);
-        if (ran.some((result) => result.status === "failed") ||
+        if (ran.some((result) => result.status === "failed" || result.status === "blocked") ||
             posting.failures > 0 ||
-            pendingPosts.failures > 0) {
+            announceFailures > 0) {
             process.exitCode = 1;
         }
     }
