@@ -112,7 +112,7 @@ export async function postResult(result, sha, timeout = POST_TIMEOUT_MS) {
         return false;
     }
 }
-export async function postResults(results, sha, totalChecks) {
+export async function postResults(results, sha, totalSelected) {
     let posted = 0;
     let failures = 0;
     for (const result of results) {
@@ -139,7 +139,7 @@ export async function postResults(results, sha, totalChecks) {
     }
     const checkFailures = results.filter((result) => result.status === "failed").length;
     if (posted > 0) {
-        console.log(`\nposted ${posted} Commit Status${posted === 1 ? "" : "es"} to ${sha.slice(0, 7)}; ${checkFailures ? `${checkFailures} of ${totalChecks} Checks failed` : `all ${totalChecks} Checks passed`}`);
+        console.log(`\nposted ${posted} Commit Status${posted === 1 ? "" : "es"} to ${sha.slice(0, 7)}; ${checkFailures ? `${checkFailures} of ${totalSelected} Checks failed` : `all ${totalSelected} Checks passed`}`);
     }
     return { posted, failures };
 }

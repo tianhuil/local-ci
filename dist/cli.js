@@ -12,13 +12,17 @@ function loadVersion() {
     }
 }
 const VERSION = loadVersion();
-const HELP = `Usage: local-ci [options]\n\nPush the current branch, run every Check in local-ci.yml, and post one\nCommit Status (local-ci/<check>) per Check to the pushed commit on GitHub.\nEach Check posts pending ("running…") while it runs, then its final state.\nPrints one line per Check; full logs go to .git/local-ci/logs/<sha>/.\n\nOptions:\n  --force          run every Check, even ones that already passed on this\n                   commit (default: skip them)\n  --no-push        don't push; HEAD must already be on GitHub (default: push)\n  -j, --jobs <N>   run up to N Checks at once (default: all Checks at once)\n  -V, --version    print the version\n  -h, --help       print this help\n\nExamples:\n  local-ci                 run after each commit\n  local-ci --force         re-run everything, e.g. to rule out a flaky pass\n  local-ci --no-push       the commit was already pushed some other way\n  local-ci --jobs 1        run Checks one at a time, e.g. if they conflict\n\nExit codes:\n  0    every Check passed or had already passed\n  1    a Check failed, or the Run could not start (see the error line)\n  2    unknown option or argument\n  130  interrupted (Ctrl-C or SIGTERM): running Checks are killed and the\n       unfinished ones post error/interrupted\n`;
+const HELP = `Usage: local-ci [options]\n\nPush the current branch, run every Check in local-ci.yml, and post one\nCommit Status (local-ci/<check>) per Check to the pushed commit on GitHub.\nEach Check posts pending ("running…") while it runs, then its final state.\nPrints one line per Check; full logs go to .git/local-ci/logs/<sha>/.\n\nOptions:\n  --force          run every Check, even ones that already passed on this\n                   commit (default: skip them)\n  --only <names>   run only the named Checks, comma-separated; the rest\n                   keep their Commit Statuses from earlier Runs\n  --no-push        don't push; HEAD must already be on GitHub (default: push)\n  -j, --jobs <N>   run up to N Checks at once (default: all Checks at once)\n  -V, --version    print the version\n  -h, --help       print this help\n\nExamples:\n  local-ci                 run after each commit\n  local-ci --force         re-run everything, e.g. to rule out a flaky pass\n  local-ci --only unit     run one Check, e.g. after fixing a failure\n  local-ci --no-push       the commit was already pushed some other way\n  local-ci --jobs 1        run Checks one at a time, e.g. if they conflict\n\nExit codes:\n  0    every Check passed or had already passed\n  1    a Check failed, or the Run could not start (see the error line)\n  2    unknown option or argument\n  130  interrupted (Ctrl-C or SIGTERM): running Checks are killed and the\n       unfinished ones post error/interrupted\n`;
 export function parseArgs(argv) {
     const options = { force: false, noPush: false };
     for (let i = 0; i < argv.length; i += 1) {
         const arg = argv[i];
         if (arg === "--force")
             options.force = true;
+        else if (arg === "--only") {
+            const value = argv[++i];
+            options.only = (value ?? "").split(",").map((name) => name.trim());
+        }
         else if (arg === "--no-push")
             options.noPush = true;
         else if (arg === "-j" || arg === "--jobs") {
@@ -39,7 +43,7 @@ export function parseArgs(argv) {
             process.exit(0);
         }
         else if (arg.startsWith("-")) {
-            console.error(`error: unknown option ${arg}; valid options: --force, --no-push, --jobs, --help, --version`);
+            console.error(`error: unknown option ${arg}; valid options: --force, --only, --no-push, --jobs, --help, --version`);
             process.exitCode = 2;
             throw new Error("ARGUMENT_ERROR");
         }
@@ -50,4 +54,19 @@ export function parseArgs(argv) {
         }
     }
     return options;
+}
+// --only names cannot be validated at parse time: the valid names come from
+// local-ci.yml, which preflight loads. Same exit-2 shape as parse errors, so
+// nothing is pushed, run, or posted when a name is unknown.
+export function validateOnly(options, checks) {
+    if (!options.only)
+        return;
+    const names = checks.map((check) => check.name);
+    for (const name of options.only) {
+        if (names.includes(name))
+            continue;
+        console.error(`error: unknown Check "${name}" for --only; Checks: ${names.join(", ")}`);
+        process.exitCode = 2;
+        throw new Error("ARGUMENT_ERROR");
+    }
 }

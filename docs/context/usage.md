@@ -12,7 +12,7 @@ $ local-ci
 ## Install
 
 ```console
-$ pnpm add --global github:tianhuil/local-ci#v0.1.1
+$ pnpm add --global github:tianhuil/local-ci#v0.1.2
 $ pnpm add --global github:tianhuil/local-ci#release
 ```
 
@@ -131,6 +131,39 @@ feature/login already up to date on origin (8d41e07)
 
 ---
 
+## Run a subset of Checks
+
+`--only` takes a comma-separated list of Check names and runs only those Checks. Preflight and the push are unchanged. A Check that is not named is neither run nor posted: its Commit Status from an earlier Run, if any, stands. Already-passed skipping still applies to the named Checks, and `--force` combines with `--only` (`local-ci --only unit --force`).
+
+```console
+$ local-ci --only unit
+pushed feature/login to origin (3f9c2ab)
+unit  passed   7s
+
+posted 1 Commit Status to 3f9c2ab; all 1 Checks passed
+```
+
+The totals line and the posted-statuses line count only the selected Checks, not the whole config:
+
+```console
+$ local-ci --only lint,unit
+pushed feature/login to origin (3f9c2ab)
+lint  skipped  already passed
+unit  failed   7s  exit 1
+...
+posted 1 Commit Status to 3f9c2ab; 1 of 2 Checks failed
+```
+
+If every named Check already passed on this commit, nothing runs and the Runner exits 0:
+
+```console
+$ local-ci --only lint,unit
+feature/login already up to date on origin (3f9c2ab)
+0 Checks run; all 2 already passed on 3f9c2ab
+```
+
+---
+
 ## Interrupting a Run
 
 Ctrl-C (SIGINT) or SIGTERM kills the running Checks and posts an `error` Commit Status with description `interrupted` for every Check that has no final result, then exits 130. A signal while results are posting lets the in-flight posts finish — those results stand — and exits 130 without extra error posts.
@@ -150,7 +183,8 @@ Each error is one line naming what failed, followed by the command that fixes it
 | `--no-push`, commit not on GitHub | `error: 3f9c2ab is not on GitHub; run local-ci without --no-push`                                       | 1    |
 | No GitHub token                   | `error: no GitHub token; run gh auth login, then local-ci`                                              | 1    |
 | Invalid `local-ci.yml`            | `error: local-ci.yml: check "unit" has no command; add one, e.g. unit: pnpm test`                       | 1    |
-| Unknown option                    | `error: unknown option --forse; valid options: --force, --no-push, --jobs, --help, --version`           | 2    |
+| Unknown option                    | `error: unknown option --forse; valid options: --force, --only, --no-push, --jobs, --help, --version`   | 2    |
+| Unknown `--only` name             | `error: unknown Check "verfy" for --only; Checks: lint, audit, verify, build, browser-smoke`            | 2    |
 | Invalid `--jobs` value            | `error: invalid value "0" for --jobs; use a positive integer, such as --jobs 4`                         | 2    |
 | Extra argument                    | `error: unexpected argument "unit"; local-ci takes no arguments`                                        | 2    |
 
@@ -185,6 +219,8 @@ Prints one line per Check; full logs go to .git/local-ci/logs/<sha>/.
 Options:
   --force          run every Check, even ones that already passed on this
                    commit (default: skip them)
+  --only <names>   run only the named Checks, comma-separated; the rest
+                   keep their Commit Statuses from earlier Runs
   --no-push        don't push; HEAD must already be on GitHub (default: push)
   -j, --jobs <N>   run up to N Checks at once (default: all Checks at once)
   -V, --version    print the version
@@ -193,6 +229,7 @@ Options:
 Examples:
   local-ci                 run after each commit
   local-ci --force         re-run everything, e.g. to rule out a flaky pass
+  local-ci --only unit     run one Check, e.g. after fixing a failure
   local-ci --no-push       the commit was already pushed some other way
   local-ci --jobs 1        run Checks one at a time, e.g. if they conflict
 
@@ -211,5 +248,4 @@ Exit codes:
 ## Not yet decided
 
 - **Streaming:** only failed Checks' output is shown, after the summary, rather than all output live.
-- **Subset of Checks:** there's no way to run one Check (e.g. `local-ci unit`).
 - **`--force-with-lease`:** an opt-in force-push for Authors who amend or rebase.
