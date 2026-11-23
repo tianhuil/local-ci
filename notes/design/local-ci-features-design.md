@@ -157,9 +157,9 @@ Changed files: `git diff --name-only $(git merge-base origin/<default> HEAD) HEA
 
 ### Phase P4 (PR 4, v0.2.1)
 
-- [ ] P4-01 Probe picomatch against Actions `paths` examples; record result in the register — verify: review: probe tests cited, register updated
-- [ ] P4-02 `run_if_changed` schema + changed-files diff + skip posts — done when MC-22…MC-27 pass and P4 is appended to `enforced_phases` — verify: cmd: `pnpm test` — covers: R-09
-- [ ] P4-03 Docs, help, README, version 0.2.1 — verify: cmd: `pnpm verify` — covers: R-10
+- [x] P4-01 Probe picomatch against Actions `paths` examples; record result in the register — verify: review: probe tests cited, register updated
+- [x] P4-02 `run_if_changed` schema + changed-files diff + skip posts — done when MC-22…MC-27 pass and P4 is appended to `enforced_phases` — verify: cmd: `pnpm test` — covers: R-09
+- [x] P4-03 Docs, help, README, version 0.2.1 — verify: cmd: `pnpm verify` — covers: R-10
 
 ## Protected Paths
 
