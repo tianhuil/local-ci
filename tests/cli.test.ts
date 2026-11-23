@@ -114,7 +114,10 @@ exec ${REAL_GIT} "$@"
 `
 						: mode === "count-slug"
 							? `#!/bin/sh
-if [ "$1" = config ] && [ "$3" = remote.origin.url ]; then echo slug >> "$SLUG_LOG"; fi
+if [ "$1" = config ] && [ "$3" = remote.origin.url ]; then
+  echo slug >> "$SLUG_LOG"
+  [ "${"${SLUG_FAIL:-0}"}" = 1 ] && exit 1
+fi
 exec ${REAL_GIT} "$@"
 `
 							: `#!/bin/sh
@@ -974,6 +977,26 @@ exec ${REAL_GIT} "$@"
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("posted 2 Commit Statuses");
 		// One lookup serves the statuses read and all pending/result posts.
+		expect(
+			(await readIfPresent(slugLog)).split("\n").filter(Boolean),
+		).toHaveLength(1);
+	});
+
+	test("a failed slug lookup is attempted exactly once and still fails the Run", async () => {
+		const repo = await makeRepo();
+		await installGitShim(repo, "count-slug");
+		const slugLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-sig-")),
+			"slug.log",
+		);
+		const result = runCli(repo, [], { SLUG_LOG: slugLog, SLUG_FAIL: "1" });
+		expect(result.status).toBe(1);
+		// Today's failure shape: the posting error names the context and the fix.
+		expect(result.stderr).toContain(
+			"error: failed to post Commit Status local-ci/unit to GitHub; run gh auth login, then local-ci",
+		);
+		// The failed lookup is cached like a successful one: one invocation
+		// across the statuses read and every post.
 		expect(
 			(await readIfPresent(slugLog)).split("\n").filter(Boolean),
 		).toHaveLength(1);

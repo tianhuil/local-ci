@@ -5,15 +5,16 @@ export async function resolveGitDir(cwd = process.cwd()): Promise<string> {
 }
 
 // Resolved once per Run: the slug cannot change mid-Run, and the shutdown
-// path must never stall resolving it again before a post.
-let cachedSlug: string | undefined;
+// path must never stall resolving it again before a post. The lookup is
+// cached as a promise, failure included, so a failed lookup is attempted
+// exactly once too.
+let slugLookup: Promise<string> | undefined;
 
-export async function repoSlug(): Promise<string> {
-	if (cachedSlug === undefined) {
-		const url = await git(["config", "--get", "remote.origin.url"]);
-		cachedSlug = url.replace(/^.*github\.com[/:]/, "").replace(/\.git$/, "");
-	}
-	return cachedSlug;
+export function repoSlug(): Promise<string> {
+	slugLookup ??= git(["config", "--get", "remote.origin.url"]).then((url) =>
+		url.replace(/^.*github\.com[/:]/, "").replace(/\.git$/, ""),
+	);
+	return slugLookup;
 }
 
 function isAuthFailure(text: string) {
