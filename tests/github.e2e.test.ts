@@ -134,6 +134,17 @@ function latestStatusesOrNone(sha: string): Record<string, string> {
 		return {};
 	}
 }
+
+// The final poll's readiness: every expected context must already show its
+// final state and description — a still-pending context never satisfies it.
+function finalStatusesReady(
+	statuses: Record<string, string>,
+	expected: Record<string, RegExp>,
+): boolean {
+	return Object.entries(expected).every(([context, pattern]) =>
+		pattern.test(statuses[context] ?? ""),
+	);
+}
 function statusCount(sha: string, context: string): number {
 	return Number(
 		run(
@@ -178,6 +189,45 @@ afterAll(() => {
 	}
 });
 
+// Unit coverage for the final-poll predicate; the e2e itself cannot be
+// driven deterministically with a pending response.
+describe("final-status readiness", () => {
+	const finals = {
+		"local-ci/fail": /^failure: failed in \d+s \(exit 1\)$/,
+		"local-ci/pass": /^success: passed in \d+s$/,
+	} as const;
+
+	test("a still-pending context never satisfies the final poll", () => {
+		expect(
+			finalStatusesReady(
+				{
+					"local-ci/pass": "pending: running…",
+					"local-ci/fail": "failure: failed in 1s (exit 1)",
+				},
+				finals,
+			),
+		).toBe(false);
+	});
+
+	test("every final state and description satisfies it", () => {
+		expect(
+			finalStatusesReady(
+				{
+					"local-ci/pass": "success: passed in 4s",
+					"local-ci/fail": "failure: failed in 7s (exit 1)",
+				},
+				finals,
+			),
+		).toBe(true);
+	});
+
+	test("a missing context never satisfies it", () => {
+		expect(
+			finalStatusesReady({ "local-ci/pass": "success: passed in 4s" }, finals),
+		).toBe(false);
+	});
+});
+
 describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 	test("MC-05: shows a pending local-ci Commit Status on GitHub while a slow Check still runs", {
 		timeout: 180000,
@@ -205,22 +255,19 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 		expect(result.output).toContain(
 			`posted 3 Commit Statuses to ${short}; 2 of 3 Checks failed`,
 		);
-		const contexts = [
-			"local-ci/fail",
-			"local-ci/pass",
-			"local-ci/slow",
-		] as const;
+		// The poll is satisfied only by the final state and description of
+		// every expected context, never by a still-pending one.
+		const finals = {
+			"local-ci/fail": /^failure: failed in \d+s \(exit 1\)$/,
+			"local-ci/pass": /^success: passed in \d+s$/,
+			"local-ci/slow": /^failure: failed in \d+s \(timeout\)$/,
+		} as const;
 		const statuses = await eventually(
 			() => latestStatuses(sha),
-			(s) => contexts.every((context) => context in s),
+			(s) => finalStatusesReady(s, finals),
 		);
-		expect(statuses["local-ci/pass"]).toMatch(/^success: passed in \d+s$/);
-		expect(statuses["local-ci/fail"]).toMatch(
-			/^failure: failed in \d+s \(exit 1\)$/,
-		);
-		expect(statuses["local-ci/slow"]).toMatch(
-			/^failure: failed in \d+s \(timeout\)$/,
-		);
+		for (const [context, pattern] of Object.entries(finals))
+			expect(statuses[context]).toMatch(pattern);
 	});
 
 	test("pushes the branch, posts real Commit Statuses, skips passed Checks, and --force reposts", {

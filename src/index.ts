@@ -14,7 +14,13 @@ import {
 	postResults,
 	statuses,
 } from "./github.js";
-import { command, errorMessage, git, killInFlightCommands } from "./proc.js";
+import {
+	command,
+	errorMessage,
+	git,
+	killInFlightCommands,
+	waitForInFlightCommands,
+} from "./proc.js";
 import { printCheckResults, printFailurePreviews } from "./report.js";
 
 async function preflight(options: Options) {
@@ -62,12 +68,25 @@ async function preflight(options: Options) {
 
 // Handlers are installed before preflight: that early handler just exits
 // 130 (nothing has run and nothing has been posted), killing any in-flight
-// git/gh child so nothing outlives the Run. The stateful handler below
-// replaces it after the push.
+// git/gh child and waiting, bounded, for it to be gone so nothing
+// observable outlives the Run. The stateful handler below replaces it
+// after the push.
+const EARLY_EXIT_WAIT_MS = 3000;
+
 function installEarlySignalHandlers(): () => void {
+	let signaled = false;
 	const onSignal = () => {
-		killInFlightCommands();
-		process.exit(130);
+		// A second signal skips the wait and force-exits at once.
+		if (signaled) process.exit(130);
+		signaled = true;
+		void (async () => {
+			try {
+				const killed = killInFlightCommands();
+				await waitForInFlightCommands(killed, EARLY_EXIT_WAIT_MS);
+			} finally {
+				process.exit(130);
+			}
+		})();
 	};
 	process.on("SIGINT", onSignal);
 	process.on("SIGTERM", onSignal);

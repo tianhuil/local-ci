@@ -108,6 +108,10 @@ exec ${REAL_GIT} "$@"
 						? `#!/bin/sh
 case "$*" in *"${"${BLOCK_GIT_ARGS:-__never__}"}"*)
   echo $$ >> "$BLOCKED_GIT_PID"
+  if [ -n "${"${BLOCK_GIT_HOLD:-}"}" ]; then
+    setsid sleep 30 &
+    echo $! >> "${"${HELD_PID:-/dev/null}"}"
+  fi
   exec sleep 30;;
 esac
 exec ${REAL_GIT} "$@"
@@ -943,6 +947,50 @@ exec ${REAL_GIT} "$@"
 			if (blocked !== undefined) {
 				try {
 					process.kill(blocked, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}
+			runner.child.kill("SIGKILL");
+		}
+	});
+
+	test("the early exit waits, bounded, for killed children to close", {
+		timeout: 30000,
+	}, async () => {
+		const repo = await makeRepo();
+		await installGitShim(repo, "block-git");
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
+		const pidFile = join(dir, "blocked.pid");
+		const heldPidFile = join(dir, "held.pid");
+		const runner = spawnCli(repo, [], {
+			BLOCK_GIT_ARGS: "--porcelain",
+			BLOCKED_GIT_PID: pidFile,
+			BLOCK_GIT_HOLD: "1",
+			HELD_PID: heldPidFile,
+		});
+		try {
+			await waitUntil(async () => (await lastPidIn(pidFile)) !== undefined);
+			// The blocked child also left a grandchild OUTSIDE its process
+			// group holding the Runner's pipes: the group SIGKILL ends the
+			// tracked shell, but its stdio cannot drain until the grandchild
+			// exits, so the wait must run to its bound before the exit.
+			await waitUntil(async () => (await lastPidIn(heldPidFile)) !== undefined);
+			const signaled = Date.now();
+			runner.child.kill("SIGTERM");
+			expect(await runner.exited).toBe(130);
+			const elapsed = Date.now() - signaled;
+			expect(elapsed).toBeGreaterThanOrEqual(2500);
+			// The bound, not the pipe holder, ends the wait: no hang.
+			expect(elapsed).toBeLessThan(8000);
+			const blocked = await lastPidIn(pidFile);
+			if (blocked !== undefined) expect(deadPid(blocked)).toBe(true);
+		} finally {
+			for (const file of [pidFile, heldPidFile]) {
+				const pid = await lastPidIn(file);
+				if (pid === undefined) continue;
+				try {
+					process.kill(pid, "SIGKILL");
 				} catch {
 					/* already dead */
 				}

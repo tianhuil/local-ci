@@ -14,8 +14,9 @@ export const safeEnv = {
 // status after the exit. git() rides the same tracked path.
 const inFlight = new Set<ChildProcess>();
 
-export function killInFlightCommands(): void {
-	for (const child of inFlight) {
+export function killInFlightCommands(): ChildProcess[] {
+	const killed = [...inFlight];
+	for (const child of killed) {
 		try {
 			if (child.pid) process.kill(-child.pid, "SIGKILL");
 		} catch {
@@ -23,6 +24,32 @@ export function killInFlightCommands(): void {
 		}
 	}
 	inFlight.clear();
+	return killed;
+}
+
+// Waits, bounded, for the killed in-flight children to finish closing:
+// 'close' fires only after the child ended and its stdio drained, so the
+// wait confirms the kills landed instead of leaving an observable (zombie)
+// child behind after the exit. A descendant outside the killed group can
+// hold the pipes open; the bound keeps that from hanging the exit.
+export function waitForInFlightCommands(
+	children: ChildProcess[],
+	ms: number,
+): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const closed = children.map(
+		(child) =>
+			new Promise<void>((resolve) => {
+				child.once("close", () => resolve());
+			}),
+	);
+	const bound = new Promise<void>((resolve) => {
+		timer = setTimeout(resolve, ms);
+	});
+	return Promise.race([
+		Promise.all(closed).then(() => undefined),
+		bound,
+	]).finally(() => clearTimeout(timer));
 }
 
 export function command(
