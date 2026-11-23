@@ -66,7 +66,7 @@ async function makeRepo(
 	);
 	await writeFile(
 		join(dir, "local-ci.yml"),
-		`checks:\n  pass: "true"\n  fail: "false"\n  slow:\n    command: sleep 30\n    timeout: ${slowTimeout}\n`,
+		`checks:\n  - name: pass\n    command: "true"\n  - name: fail\n    command: "false"\n  - name: slow\n    command: sleep 30\n    timeout: ${slowTimeout}\n`,
 	);
 	await writeFile(join(dir, "id.txt"), `${branch}\n`);
 	run("git", ["add", "."], dir);

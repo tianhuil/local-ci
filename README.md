@@ -1,7 +1,7 @@
 # local-ci
 
 [![CI](https://github.com/tianhuil/local-ci/actions/workflows/ci.yml/badge.svg)](https://github.com/tianhuil/local-ci/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.1.2-blue)](https://github.com/tianhuil/local-ci/releases)
+[![Release](https://img.shields.io/badge/release-v0.2.0-blue)](https://github.com/tianhuil/local-ci/releases)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -14,14 +14,14 @@ Works with any repository that uses GitHub pull requests and a YAML file of shel
 Requires [Node.js 18+](https://nodejs.org), `git`, and the [GitHub CLI](https://cli.github.com) logged in (`gh auth login` — the default scopes already allow Commit Statuses).
 
 ```sh
-pnpm add --global github:tianhuil/local-ci#v0.1.2   # or: npm i -g github:tianhuil/local-ci#v0.1.2
+pnpm add --global github:tianhuil/local-ci#v0.2.0   # or: npm i -g github:tianhuil/local-ci#v0.2.0
 ```
 
-For one-off runs use `npx github:tianhuil/local-ci#v0.1.2`, `pnpm dlx`, or `bunx`; pin a tag for repeatability, because `pnpm dlx` and `bunx` cache the moving `#release` ref.
+For one-off runs use `npx github:tianhuil/local-ci#v0.2.0`, `pnpm dlx`, or `bunx`; pin a tag for repeatability, because `pnpm dlx` and `bunx` cache the moving `#release` ref.
 
 ```sh
 $ local-ci --version
-0.1.2
+0.2.0
 ```
 
 `main` carries source only; installs come from the [`release`](https://github.com/tianhuil/local-ci/tree/release) branch and its tags.
@@ -45,7 +45,7 @@ full log: .git/local-ci/logs/3f9c2ab/unit.log
 posted 4 Commit Statuses to 3f9c2ab; 1 of 4 Checks failed
 ```
 
-Each run: verify the working tree is clean, push the current branch, post a `pending` (`running…`) Commit Status for every Check about to run, run every Check from `local-ci.yml` in parallel (each killed after its timeout), and post one Commit Status per Check. The PR then shows:
+Each run: verify the working tree is clean, push the current branch, post a `pending` (`running…`) Commit Status for every Check about to run, run every Check from `local-ci.yml` — a Check with `depends_on` starts once its dependencies pass; the rest run in parallel (each killed after its timeout) — and post one Commit Status per Check. The PR then shows:
 
 ```
 ✓ local-ci/lint        passed in 4s
@@ -54,7 +54,7 @@ Each run: verify the working tree is clean, push the current branch, post a `pen
 ✓ local-ci/build       passed in 52s
 ```
 
-Run a subset with `--only`; Checks you don't name are neither run nor posted, so their statuses from earlier Runs stand:
+Run a subset with `--only`; Checks you don't name are neither run nor posted, so their statuses from earlier Runs stand — but named Checks bring every Check they depend on:
 
 ```console
 $ local-ci --only unit
@@ -64,18 +64,24 @@ unit  passed   7s
 posted 1 Commit Status to 3f9c2ab; all 1 Checks passed
 ```
 
-Checks are declared in `local-ci.yml` at the repository root:
+Checks are declared in `local-ci.yml` at the repository root, as a list:
 
 ```yaml
 timeout: 60 # seconds per Check; default 60
 checks:
-  lint: pnpm lint
-  typecheck: pnpm typecheck
-  unit: vitest run
-  build:
+  - name: lint
+    command: pnpm lint
+  - name: typecheck
+    command: pnpm typecheck
+  - name: unit
+    command: vitest run
+    depends_on: [typecheck] # optional; waits for typecheck to pass
+  - name: build
     command: act -j build # run a GitHub Actions job locally; needs Docker
     timeout: 300 # overrides the top-level timeout
 ```
+
+A Check whose dependency failed, timed out, or was itself blocked doesn't run: it prints `blocked  depends on <names>` and posts `failure` with description `not run; depends on <names>`.
 
 Key design choices, one line each:
 
@@ -83,6 +89,7 @@ Key design choices, one line each:
 - **Logs stay local.** Reviewers see pass/fail per check; full output lives in `.git/local-ci/logs/`. A Commit Status only carries 140 characters.
 - **Never force-pushes.** A rejected push is the Author's to resolve; nothing runs, nothing is posted.
 - **Idempotent.** A Check is skipped only when its latest `local-ci/<check>` status on the exact SHA is `success`; a pass that a later run replaced with a failure doesn't count, other tools' statuses are ignored, and `--force` re-runs everything.
+- **Dependency-aware.** `depends_on` orders Checks; a failed dependency blocks its dependents (`blocked  depends on <names>`), and a Check that must run reruns its dependencies even if they already passed.
 - **Interruptible.** SIGINT/SIGTERM kills the running Checks, posts `error`/`interrupted` for the unfinished ones, and exits 130; results already posting stand.
 - **Trust, not enforcement.** Any Author with write access can post any status — this is a team-trust tool, which is why `main` stays on cloud CI.
 

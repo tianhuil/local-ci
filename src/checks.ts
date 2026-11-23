@@ -5,11 +5,14 @@ import { safeEnv } from "./proc.js";
 
 export type Result = {
 	check: Check;
-	status: "passed" | "failed" | "skipped";
+	status: "passed" | "failed" | "skipped" | "blocked";
 	duration: number;
 	code?: number;
 	timedOut?: boolean;
 	log?: string;
+	// Set when status is "blocked": every direct dependency that did not
+	// pass, in depends_on order.
+	blockedOn?: string[];
 };
 
 // Checks currently running, so a SIGINT/SIGTERM handler can stop them

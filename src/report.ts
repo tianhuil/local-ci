@@ -7,6 +7,12 @@ export function printCheckResults(results: Result[], width: number): void {
 			console.log(`${name}  skipped  already passed`);
 			continue;
 		}
+		if (result.status === "blocked") {
+			console.log(
+				`${name}  blocked  depends on ${(result.blockedOn ?? []).join(", ")}`,
+			);
+			continue;
+		}
 		const outcome =
 			result.status === "failed"
 				? `  ${result.timedOut ? "timeout" : `exit ${result.code}`}`
