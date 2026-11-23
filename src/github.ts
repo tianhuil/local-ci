@@ -96,6 +96,7 @@ export async function postPending(
 export async function postInterrupted(
 	checks: Check[],
 	sha: string,
+	timeout: number = POST_TIMEOUT_MS,
 ): Promise<void> {
 	for (const check of checks) {
 		try {
@@ -112,7 +113,7 @@ export async function postInterrupted(
 					"description=interrupted",
 				],
 				process.cwd(),
-				POST_TIMEOUT_MS,
+				timeout,
 			);
 		} catch {
 			/* best effort: the Run is already exiting 130 */
@@ -124,6 +125,7 @@ export async function postInterrupted(
 export async function postResult(
 	result: Result,
 	sha: string,
+	timeout: number = POST_TIMEOUT_MS,
 ): Promise<boolean> {
 	const { state, description } = statusFor(result);
 	const context = `local-ci/${result.check.name}`;
@@ -141,7 +143,7 @@ export async function postResult(
 				`description=${description}`,
 			],
 			process.cwd(),
-			POST_TIMEOUT_MS,
+			timeout,
 		);
 		return true;
 	} catch {

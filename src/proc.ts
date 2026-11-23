@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { type ChildProcess, execFile } from "node:child_process";
 import process from "node:process";
 import { promisify } from "node:util";
 
@@ -18,16 +18,48 @@ export async function git(
 	return (await exec("git", args, { cwd, env: safeEnv })).stdout.trimEnd();
 }
 
-export async function command(
+// The command() children currently in flight, so a forced exit can kill an
+// in-flight gh/git call instead of letting it outlive the Run and apply a
+// status after the exit.
+const inFlight = new Set<ChildProcess>();
+
+export function killInFlightCommands(): void {
+	for (const child of inFlight) {
+		try {
+			child.kill("SIGKILL");
+		} catch {
+			/* already exited */
+		}
+	}
+	inFlight.clear();
+}
+
+export function command(
 	args: string[],
 	cwd = process.cwd(),
 	timeout?: number,
-) {
-	return exec(args[0], args.slice(1), {
-		cwd,
-		env: safeEnv,
-		timeout,
-		killSignal: "SIGKILL",
+): Promise<{ stdout: string; stderr: string }> {
+	return new Promise((resolve, reject) => {
+		const child = execFile(
+			args[0],
+			args.slice(1),
+			{
+				cwd,
+				env: safeEnv,
+				timeout,
+				killSignal: "SIGKILL",
+			},
+			(error, stdout, stderr) => {
+				inFlight.delete(child);
+				if (error) {
+					Object.assign(error, { stdout, stderr });
+					reject(error);
+				} else {
+					resolve({ stdout, stderr });
+				}
+			},
+		);
+		inFlight.add(child);
 	});
 }
 

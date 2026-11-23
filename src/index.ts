@@ -13,7 +13,7 @@ import {
 	postResults,
 	statuses,
 } from "./github.js";
-import { command, errorMessage, git } from "./proc.js";
+import { command, errorMessage, git, killInFlightCommands } from "./proc.js";
 import { printCheckResults, printFailurePreviews } from "./report.js";
 
 async function preflight(options: Options) {
@@ -59,6 +59,27 @@ async function preflight(options: Options) {
 	return { ...config, branch, sha };
 }
 
+// Handlers are installed before preflight: that early handler just exits
+// 130 (nothing has run and nothing has been posted), killing any in-flight
+// git/gh child so nothing outlives the Run. The stateful handler below
+// replaces it after the push.
+function installEarlySignalHandlers(): () => void {
+	const onSignal = () => {
+		killInFlightCommands();
+		process.exit(130);
+	};
+	process.on("SIGINT", onSignal);
+	process.on("SIGTERM", onSignal);
+	return () => {
+		process.off("SIGINT", onSignal);
+		process.off("SIGTERM", onSignal);
+	};
+}
+
+// All shutdown posts share one global budget, so a Run with many Checks
+// cannot spend one per-post timeout per blocked post before exiting 130.
+const SHUTDOWN_BUDGET_MS = 10_000;
+
 // Signal contract: the first SIGINT/SIGTERM stops the scheduler — no
 // un-started Check begins — waits for the in-flight pending post (so it
 // cannot land after the status that replaces it), kills the running Checks
@@ -87,43 +108,54 @@ type RunState = {
 async function postShutdownStatuses(
 	state: RunState,
 	completed: Map<string, Result>,
+	deadline: number,
 ): Promise<void> {
 	for (const check of state.toRun) {
 		if (state.postedFinal.has(check.name)) continue;
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) return; // budget spent: skip the remaining posts
 		const result = completed.get(check.name);
 		if (result) {
-			if (await postResult(result, state.sha))
+			if (await postResult(result, state.sha, remaining))
 				state.postedFinal.add(check.name);
 			continue;
 		}
 		if (state.pendingPosted.has(`local-ci/${check.name}`))
-			await postInterrupted([check], state.sha);
+			await postInterrupted([check], state.sha, remaining);
 	}
 }
 
 function installSignalHandlers(state: RunState) {
 	const onSignal = () => {
-		// A second signal force-exits: remaining best-effort posts are skipped.
-		if (state.interrupted) process.exit(130);
+		// A second signal force-exits at once: the in-flight gh call is
+		// killed (so it cannot apply a status after the exit) and the
+		// remaining best-effort posts are skipped.
+		if (state.interrupted) {
+			killInFlightCommands();
+			process.exit(130);
+		}
 		state.interrupted = true;
 		if (state.phase === "running") {
 			// What finished before the signal: results recorded later belong
 			// to Checks the shutdown killed, which read as interrupted.
 			const completed = new Map(state.results);
+			const deadline = Date.now() + SHUTDOWN_BUDGET_MS;
 			void (async () => {
 				try {
 					// Serialize with pending posting: the in-flight pending
 					// post settles before any status that replaces it.
 					await state.pendingDone;
 					await terminateRunningChecks();
-					await postShutdownStatuses(state, completed);
+					await postShutdownStatuses(state, completed, deadline);
 				} finally {
+					killInFlightCommands();
 					process.exit(130);
 				}
 			})();
 			return;
 		}
 		if (state.phase === "posting") return; // main() exits 130 after posting
+		killInFlightCommands();
 		process.exit(130);
 	};
 	process.on("SIGINT", onSignal);
@@ -133,8 +165,10 @@ function installSignalHandlers(state: RunState) {
 export async function main() {
 	try {
 		const options = parseArgs(process.argv.slice(2));
+		const stopEarlySignals = installEarlySignalHandlers();
 		const info = await preflight(options);
 		await push(info.branch, options.noPush, info.sha);
+		stopEarlySignals();
 		const state: RunState = {
 			phase: "running",
 			interrupted: false,

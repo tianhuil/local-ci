@@ -76,7 +76,7 @@ function runCli(repo: Repo, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
 }
 async function installGitShim(
 	repo: Repo,
-	mode: "record-push" | "record-env" | "trace-push",
+	mode: "record-push" | "record-env" | "trace-push" | "slow-push",
 ) {
 	const shim = join(repo.fakeBin, "git");
 	const body =
@@ -90,7 +90,15 @@ exec ${REAL_GIT} "$@"
 [ "$1" = push ] && echo PUSH >> "$TRACE"
 exec ${REAL_GIT} "$@"
 `
-				: `#!/bin/sh
+				: mode === "slow-push"
+					? `#!/bin/sh
+if [ "$1" = push ]; then
+  echo $$ >> "$SLOW_PUSH_PID"
+  exec sleep 30
+fi
+exec ${REAL_GIT} "$@"
+`
+					: `#!/bin/sh
 printf '%s|%s\n' "$GIT_TERMINAL_PROMPT" "$GIT_ASKPASS" >> "$GIT_ENV_LOG"
 exec ${REAL_GIT} "$@"
 `;
@@ -98,6 +106,21 @@ exec ${REAL_GIT} "$@"
 	await chmod(shim, 0o755);
 	return shim;
 }
+// Reads the pid file the slow-push shim leaves, for exact cleanup.
+const slowPushPgid = async (path: string): Promise<number | undefined> => {
+	const pid = Number(
+		(await readIfPresent(path)).split("\n").filter(Boolean).at(-1),
+	);
+	return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+};
+const deadPid = (pid: number) => {
+	try {
+		process.kill(pid, 0);
+		return false;
+	} catch {
+		return true;
+	}
+};
 function allOutput(result: ReturnType<typeof runCli>) {
 	return `${result.stdout}${result.stderr}`;
 }
@@ -685,8 +708,8 @@ exec ${REAL_GIT} "$@"
 		}
 	});
 
-	test("a second signal during a blocked shutdown post force-exits 130 without duplicate posts", {
-		timeout: 15000,
+	test("a second signal during a blocked shutdown post force-exits 130 without duplicate posts or gh leftovers", {
+		timeout: 30000,
 	}, async () => {
 		const repo = await makeRepo(
 			'checks:\n  only: "echo $$ > $READY/only.pid; sleep 9871"\n',
@@ -695,9 +718,11 @@ exec ${REAL_GIT} "$@"
 		const ready = join(dir, "ready");
 		await mkdir(ready);
 		const postLog = join(dir, "posts.log");
+		const applyLog = join(dir, "applies.log");
 		const runner = spawnCli(repo, [], {
 			READY: ready,
 			GH_POST_LOG: postLog,
+			GH_APPLY_LOG: applyLog,
 			GH_ERROR_DELAY: "10",
 		});
 		try {
@@ -713,9 +738,115 @@ exec ${REAL_GIT} "$@"
 			expect(Date.now() - signaled).toBeLessThan(2000);
 			const posts = await readFile(postLog, "utf8");
 			expect(posts.match(/state=error/g)).toHaveLength(1);
+			// The in-flight gh died with the Runner: no fake gh process survives
+			// the force-exit (its script lives under the run's fakeBin path).
+			await sleep(200);
+			const processes = spawnSync("ps", ["-eo", "args"], {
+				encoding: "utf8",
+			});
+			expect(processes.stdout).not.toContain(repo.fakeBin);
+			// …and the killed post never applies after the exit.
+			await sleep(11000);
+			const applies = await readIfPresent(applyLog);
+			expect(applies).not.toContain("state=error");
 		} finally {
 			const pgid = Number(await readIfPresent(join(ready, "only.pid")));
 			if (Number.isInteger(pgid) && pgid > 0) {
+				try {
+					process.kill(-pgid, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}
+			runner.child.kill("SIGKILL");
+		}
+	});
+
+	test("a signal during a blocked push exits 130 immediately with nothing posted", {
+		timeout: 30000,
+	}, async () => {
+		const repo = await makeRepo();
+		await installGitShim(repo, "slow-push");
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
+		const pushPidFile = join(dir, "push.pid");
+		const postLog = join(dir, "posts.log");
+		const applyLog = join(dir, "applies.log");
+		const runner = spawnCli(repo, [], {
+			GH_POST_LOG: postLog,
+			GH_APPLY_LOG: applyLog,
+			SLOW_PUSH_PID: pushPidFile,
+		});
+		try {
+			// The push is blocked in the shim's sleep 30.
+			await waitUntil(
+				async () => (await slowPushPgid(pushPidFile)) !== undefined,
+			);
+			const signaled = Date.now();
+			runner.child.kill("SIGTERM");
+			expect(await runner.exited).toBe(130);
+			expect(Date.now() - signaled).toBeLessThan(2000);
+			// No Check ran and no status was requested or applied.
+			expect(await readIfPresent(postLog)).toBe("");
+			expect(await readIfPresent(applyLog)).toBe("");
+			// The blocked push child died with the Runner, not after it.
+			const pushPid = await slowPushPgid(pushPidFile);
+			if (pushPid !== undefined) expect(deadPid(pushPid)).toBe(true);
+		} finally {
+			const pushPid = await slowPushPgid(pushPidFile);
+			if (pushPid !== undefined) {
+				try {
+					process.kill(pushPid, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}
+			runner.child.kill("SIGKILL");
+		}
+	});
+
+	test("shutdown posts share one global bound, not one timeout per post", {
+		timeout: 60000,
+	}, async () => {
+		const config =
+			'checks:\n  a: "echo $$ > $READY/a.pid; sleep 9871"\n  b: "echo $$ > $READY/b.pid; sleep 9871"\n  c: "echo $$ > $READY/c.pid; sleep 9871"\n';
+		const repo = await makeRepo(config);
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
+		const ready = join(dir, "ready");
+		await mkdir(ready);
+		const postLog = join(dir, "posts.log");
+		// Every error post blocks for 30s, far past the shutdown budget: with a
+		// per-post bound the Run would spend 3× the budget before exiting.
+		const runner = spawnCli(repo, [], {
+			READY: ready,
+			GH_POST_LOG: postLog,
+			GH_ERROR_DELAY: "30",
+		});
+		const pgidOf = async (name: string): Promise<number | undefined> => {
+			const pid = Number(await readIfPresent(join(ready, `${name}.pid`)));
+			return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+		};
+		try {
+			await waitUntil(
+				async () =>
+					(await pgidOf("a")) !== undefined &&
+					(await pgidOf("b")) !== undefined &&
+					(await pgidOf("c")) !== undefined,
+			);
+			const signaled = Date.now();
+			runner.child.kill("SIGTERM");
+			expect(await runner.exited).toBe(130);
+			// One ~10s budget for the whole shutdown, not 10s per blocked post.
+			expect(Date.now() - signaled).toBeLessThan(14000);
+			const posts = await readFile(postLog, "utf8");
+			expect(posts).toContain(
+				"-f state=error -f context=local-ci/a -f description=interrupted",
+			);
+			// The budget ran out mid-shutdown: the later posts were skipped.
+			expect(posts.match(/state=error/g)).toHaveLength(1);
+		} finally {
+			for (const name of ["a", "b", "c"]) {
+				const pgid = await pgidOf(name);
+				if (pgid === undefined) continue;
 				try {
 					process.kill(-pgid, "SIGKILL");
 				} catch {
