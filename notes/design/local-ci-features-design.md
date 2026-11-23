@@ -150,10 +150,10 @@ Changed files: `git diff --name-only $(git merge-base origin/<default> HEAD) HEA
 
 ### Phase P3 (PR 3, v0.2.0)
 
-- [ ] P3-01 zod schemas, messages, `z.infer` Check type; local-ci's own `local-ci.yml` in list form — done when MC-11…MC-17 pass — verify: cmd: `pnpm test` — covers: R-06, R-07
-- [ ] P3-02 Scheduler with `depends_on`, `--jobs` cap, list-order starts and output; blocked semantics — done when MC-18…MC-20 pass and P3 is appended to `enforced_phases` — verify: cmd: `pnpm test` — covers: R-08
-- [ ] P3-03 Decide `z.prettifyError` vs manual formatting; update usage.md error table — done when the invalid-config row matches the shipped output — verify: review: error output matches the documented row
-- [ ] P3-04 Docs, help, README, version 0.2.0 — verify: cmd: `pnpm verify` (MC-21) — covers: R-10
+- [x] P3-01 zod schemas, messages, `z.infer` Check type; local-ci's own `local-ci.yml` in list form — done when MC-11…MC-17 pass — verify: cmd: `pnpm test` — covers: R-06, R-07
+- [x] P3-02 Scheduler with `depends_on`, `--jobs` cap, list-order starts and output; blocked semantics — done when MC-18…MC-20 pass and P3 is appended to `enforced_phases` — verify: cmd: `pnpm test` — covers: R-08
+- [x] P3-03 Decide `z.prettifyError` vs manual formatting; update usage.md error table — done when the invalid-config row matches the shipped output — verify: review: error output matches the documented row
+- [x] P3-04 Docs, help, README, version 0.2.0 — verify: cmd: `pnpm verify` (MC-21) — covers: R-10
 
 ### Phase P4 (PR 4, v0.2.1)
 
