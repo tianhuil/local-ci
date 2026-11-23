@@ -607,6 +607,146 @@ exec ${REAL_GIT} "$@"
 		expect(result.stdout).not.toContain("1 of 3");
 	});
 
+	test("--only parsing edges: trimmed names, duplicate names, missing value, = form, repeated flags are last-wins", async () => {
+		const config =
+			'checks:\n  lint: "echo ran-lint >> $TRACE"\n  unit: "echo ran-unit >> $TRACE"\n  other: "echo ran-other >> $TRACE"\n';
+		type Edge = {
+			label: string;
+			args: string[];
+			env?: NodeJS.ProcessEnv;
+			assert: (context: {
+				result: ReturnType<typeof runCli>;
+				label: string;
+				sha: string;
+				posts: string;
+				trace: string;
+			}) => void;
+		};
+		const cases: Edge[] = [
+			{
+				label: "whitespace around names is trimmed",
+				args: ["--only", "lint, unit"],
+				assert: ({ result, label, posts, trace }) => {
+					expect(result.status, label).toBe(0);
+					expect(result.stdout, label).toContain("lint  passed");
+					expect(result.stdout, label).toContain("unit  passed");
+					expect(posts, label).toContain("context=local-ci/lint");
+					expect(posts, label).toContain("context=local-ci/unit");
+					expect(trace, label).toContain("ran-lint");
+					expect(trace, label).toContain("ran-unit");
+				},
+			},
+			{
+				label:
+					"duplicate names run and post a Check once, with the unique selection as denominator",
+				args: ["--only", "unit,unit"],
+				assert: ({ result, label, posts, trace }) => {
+					expect(result.status, label).toBe(0);
+					expect(result.stdout, label).toContain("unit  passed");
+					expect(posts.match(/context=local-ci\/unit/g), label).toHaveLength(2); // one pending, one result — never two Runs
+					expect(posts.match(/state=pending/g), label).toHaveLength(1);
+					expect(posts.match(/state=success/g), label).toHaveLength(1);
+					expect(trace.match(/ran-unit/g), label).toHaveLength(1);
+					expect(result.stdout, label).toContain("all 1 Checks passed");
+					expect(result.stdout, label).not.toContain("other");
+				},
+			},
+			{
+				label: "the all-already-passed count uses the unique selection",
+				args: ["--only", "unit,unit"],
+				env: {
+					GH_STATUSES: '[{"state":"success","context":"local-ci/unit"}]',
+				},
+				assert: ({ result, label, sha, posts, trace }) => {
+					expect(result.status, label).toBe(0);
+					expect(result.stdout, label).toContain(
+						`0 Checks run; all 1 already passed on ${sha.slice(0, 7)}`,
+					);
+					expect(result.stdout, label).not.toContain("all 2");
+					expect(posts, label).toBe("");
+					expect(trace, label).toBe("");
+				},
+			},
+			{
+				// Pinned deliberately: a repeated --only is last-wins, matching
+				// how a repeated --jobs value behaves.
+				label: "a repeated --only flag is last-wins",
+				args: ["--only", "lint", "--only", "unit"],
+				assert: ({ result, label, posts, trace }) => {
+					expect(result.status, label).toBe(0);
+					expect(result.stdout, label).toContain("unit  passed");
+					expect(result.stdout, label).not.toContain("lint");
+					expect(result.stdout, label).not.toContain("other");
+					expect(posts, label).toContain("context=local-ci/unit");
+					expect(posts, label).not.toContain("local-ci/lint");
+					expect(posts, label).not.toContain("local-ci/other");
+					expect(trace, label).toContain("ran-unit");
+					expect(trace, label).not.toContain("ran-lint");
+				},
+			},
+			{
+				label: "a missing value is an unknown Check error",
+				args: ["--only"],
+				assert: ({ result, label, posts }) => {
+					expect(result.status, label).toBe(2);
+					expect(result.stderr.trim(), label).toBe(
+						'error: unknown Check "" for --only; Checks: lint, unit, other',
+					);
+					expect(posts, label).toBe("");
+				},
+			},
+			{
+				label: "the = form is an unknown option, not a value",
+				args: ["--only=a=b"],
+				assert: ({ result, label, posts }) => {
+					expect(result.status, label).toBe(2);
+					expect(result.stderr.trim(), label).toBe(
+						"error: unknown option --only=a=b; valid options: --force, --only, --no-push, --jobs, --help, --version",
+					);
+					expect(posts, label).toBe("");
+				},
+			},
+		];
+		for (const { label, args, env, assert } of cases) {
+			const repo = await makeRepo(config);
+			const dir = await mkdtemp(join(tmpdir(), "local-ci-only-edge-"));
+			const trace = join(dir, "trace.log");
+			const postLog = join(dir, "posts.log");
+			const result = runCli(repo, args, {
+				TRACE: trace,
+				GH_POST_LOG: postLog,
+				...env,
+			});
+			await assert({
+				result,
+				label,
+				sha: repo.sha,
+				posts: await readIfPresent(postLog),
+				trace: await readIfPresent(trace),
+			});
+		}
+	});
+
+	test("an invalid config surfaces before --only validation, with nothing pushed or posted", async () => {
+		const repo = await makeRepo("checks:\n  unit:\n    timeout: 2\n");
+		await installGitShim(repo, "record-push");
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-only-order-"));
+		const pushLog = join(dir, "push.log");
+		const postLog = join(dir, "posts.log");
+		const result = runCli(repo, ["--only", "verfy"], {
+			NO_PUSH_LOG: pushLog,
+			GH_POST_LOG: postLog,
+		});
+		expect(result.status).toBe(1);
+		// The config error wins: exit 1, and validateOnly's message never ran.
+		expect(result.stderr.trim()).toBe(
+			'error: local-ci.yml: check "unit" has no command; add one, e.g. unit: pnpm test',
+		);
+		expect(result.stderr).not.toContain("--only");
+		expect(await readIfPresent(pushLog)).toBe("");
+		expect(await readIfPresent(postLog)).toBe("");
+	});
+
 	test("MC-01: posts a pending Commit Status for every Check about to run, after push, before execution", async () => {
 		const config =
 			'checks:\n  one: "echo ran-one >> $TRACE"\n  two: "echo ran-two >> $TRACE"\n  done: "echo ran-done >> $TRACE"\n';
