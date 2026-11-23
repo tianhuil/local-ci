@@ -145,8 +145,8 @@ Changed files: `git diff --name-only $(git merge-base origin/<default> HEAD) HEA
 
 ### Phase P2 (PR 2, v0.1.2)
 
-- [ ] P2-01 `--only` parsing, subset selection, skip/force interaction, exact unknown-name error, positional still an error — done when MC-06…MC-10 pass and P2 is appended to `enforced_phases` — verify: cmd: `pnpm test` — covers: R-04, R-05
-- [ ] P2-02 Docs, help, README, version 0.1.2; "Not yet decided" subset bullet removed — verify: cmd: `pnpm verify` — covers: R-10
+- [x] P2-01 `--only` parsing, subset selection, skip/force interaction, exact unknown-name error, positional still an error — done when MC-06…MC-10 pass and P2 is appended to `enforced_phases` — verify: cmd: `pnpm test` — covers: R-04, R-05
+- [x] P2-02 Docs, help, README, version 0.1.2; "Not yet decided" subset bullet removed — verify: cmd: `pnpm verify` — covers: R-10
 
 ### Phase P3 (PR 3, v0.2.0)
 
