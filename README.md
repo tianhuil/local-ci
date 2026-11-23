@@ -1,7 +1,7 @@
 # local-ci
 
 [![CI](https://github.com/tianhuil/local-ci/actions/workflows/ci.yml/badge.svg)](https://github.com/tianhuil/local-ci/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.1.0-blue)](https://github.com/tianhuil/local-ci/releases)
+[![Release](https://img.shields.io/badge/release-v0.1.1-blue)](https://github.com/tianhuil/local-ci/releases)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -14,14 +14,14 @@ Works with any repository that uses GitHub pull requests and a YAML file of shel
 Requires [Node.js 18+](https://nodejs.org), `git`, and the [GitHub CLI](https://cli.github.com) logged in (`gh auth login` — the default scopes already allow Commit Statuses).
 
 ```sh
-pnpm add --global github:tianhuil/local-ci#v0.1.0   # or: npm i -g github:tianhuil/local-ci#v0.1.0
+pnpm add --global github:tianhuil/local-ci#v0.1.1   # or: npm i -g github:tianhuil/local-ci#v0.1.1
 ```
 
-For one-off runs use `npx github:tianhuil/local-ci#v0.1.0`, `pnpm dlx`, or `bunx`; pin a tag for repeatability, because `pnpm dlx` and `bunx` cache the moving `#release` ref.
+For one-off runs use `npx github:tianhuil/local-ci#v0.1.1`, `pnpm dlx`, or `bunx`; pin a tag for repeatability, because `pnpm dlx` and `bunx` cache the moving `#release` ref.
 
 ```sh
 $ local-ci --version
-0.1.0
+0.1.1
 ```
 
 `main` carries source only; installs come from the [`release`](https://github.com/tianhuil/local-ci/tree/release) branch and its tags.
@@ -45,7 +45,7 @@ full log: .git/local-ci/logs/3f9c2ab/unit.log
 posted 4 Commit Statuses to 3f9c2ab; 1 of 4 Checks failed
 ```
 
-Each run: verify the working tree is clean, push the current branch, run every Check from `local-ci.yml` in parallel (each killed after its timeout), and post one Commit Status per Check. The PR then shows:
+Each run: verify the working tree is clean, push the current branch, post a `pending` (`running…`) Commit Status for every Check about to run, run every Check from `local-ci.yml` in parallel (each killed after its timeout), and post one Commit Status per Check. The PR then shows:
 
 ```
 ✓ local-ci/lint        passed in 4s
@@ -72,7 +72,8 @@ Key design choices, one line each:
 - **Your `gh` token, no shared secret.** Statuses post through the Commit Statuses API with the login you already have; no GitHub App private key to distribute.
 - **Logs stay local.** Reviewers see pass/fail per check; full output lives in `.git/local-ci/logs/`. A Commit Status only carries 140 characters.
 - **Never force-pushes.** A rejected push is the Author's to resolve; nothing runs, nothing is posted.
-- **Idempotent.** Checks that already passed on the exact SHA are skipped; `--force` re-runs everything.
+- **Idempotent.** A Check is skipped only when its latest `local-ci/<check>` status on the exact SHA is `success`; a pass that a later run replaced with a failure doesn't count, other tools' statuses are ignored, and `--force` re-runs everything.
+- **Interruptible.** SIGINT/SIGTERM kills the running Checks, posts `error`/`interrupted` for the unfinished ones, and exits 130; results already posting stand.
 - **Trust, not enforcement.** Any Author with write access can post any status — this is a team-trust tool, which is why `main` stays on cloud CI.
 
 Full behavior — every option, the error table, exit codes — is specified in the [usage contract](docs/context/usage.md); the reasoning behind the architecture is in the [context doc](docs/context/base.md) and [ADRs](docs/adr/).

@@ -1,13 +1,26 @@
+import { appendFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import pMap from "p-map";
-import { type Result, runCheck } from "./checks.js";
+import { type Result, runCheck, terminateRunningChecks } from "./checks.js";
 import { type Options, parseArgs } from "./cli.js";
-import { loadChecks } from "./config.js";
+import { type Check, loadChecks } from "./config.js";
 import { push, repoSlug, resolveGitDir } from "./git.js";
-import { postResults, statuses } from "./github.js";
-import { command, errorMessage, git } from "./proc.js";
+import {
+	postInterrupted,
+	postPending,
+	postResult,
+	postResults,
+	statuses,
+} from "./github.js";
+import {
+	command,
+	errorMessage,
+	git,
+	killInFlightCommands,
+	waitForInFlightCommands,
+} from "./proc.js";
 import { printCheckResults, printFailurePreviews } from "./report.js";
 
 async function preflight(options: Options) {
@@ -53,11 +66,158 @@ async function preflight(options: Options) {
 	return { ...config, branch, sha };
 }
 
+// Handlers are installed before preflight: that early handler just exits
+// 130 (nothing has run and nothing has been posted), killing any in-flight
+// git/gh child and waiting, bounded, for it to be gone so nothing
+// observable outlives the Run. The stateful handler below replaces it
+// after the push.
+const EARLY_EXIT_WAIT_MS = 3000;
+
+function installEarlySignalHandlers(): () => void {
+	let signaled = false;
+	const onSignal = () => {
+		// A second signal skips the wait and force-exits at once.
+		if (signaled) process.exit(130);
+		signaled = true;
+		void (async () => {
+			try {
+				const killed = killInFlightCommands();
+				await waitForInFlightCommands(killed, EARLY_EXIT_WAIT_MS);
+			} finally {
+				process.exit(130);
+			}
+		})();
+	};
+	process.on("SIGINT", onSignal);
+	process.on("SIGTERM", onSignal);
+	return () => {
+		process.off("SIGINT", onSignal);
+		process.off("SIGTERM", onSignal);
+	};
+}
+
+// Test seam: records the handler-swap order, so a test can prove the
+// stateful handler is installed before the early one is removed and no
+// stretch runs on Node's default signal behavior.
+function recordSwap(step: string): void {
+	const log = process.env.LOCAL_CI_SWAP_LOG;
+	if (!log) return;
+	try {
+		appendFileSync(log, `${step}\n`);
+	} catch {
+		/* test-only log */
+	}
+}
+
+// All shutdown posts share one global budget, so a Run with many Checks
+// cannot spend one per-post timeout per blocked post before exiting 130.
+const SHUTDOWN_BUDGET_MS = 10_000;
+
+// Signal contract: the first SIGINT/SIGTERM stops the scheduler — no
+// un-started Check begins — waits for the in-flight pending post (so it
+// cannot land after the status that replaces it), kills the running Checks
+// (SIGTERM, then SIGKILL, awaited), and gives every Check that posted
+// pending either its final result (if it completed) or error/interrupted,
+// then exits 130. A signal while results post lets the in-flight posts
+// finish (they are final) and exits 130 without extra error posts. A second
+// signal force-exits 130 at once, skipping the remaining best-effort posts.
+// Handlers stay installed until exit.
+type RunState = {
+	phase: "running" | "posting" | "done";
+	interrupted: boolean;
+	toRun: Check[];
+	results: Map<string, Result>;
+	pendingPosted: Set<string>;
+	postedFinal: Set<string>;
+	pendingDone: Promise<void>;
+	sha: string;
+};
+
+// Shutdown statuses: every Check that announced itself ends up with either
+// its final result or error/interrupted — never a stale pending — and
+// already-posted finals are never posted twice. `completed` is the snapshot
+// taken when the signal arrived, so a Check killed by the shutdown itself
+// still reads as interrupted, not as its synthetic failure result.
+async function postShutdownStatuses(
+	state: RunState,
+	completed: Map<string, Result>,
+	deadline: number,
+): Promise<void> {
+	for (const check of state.toRun) {
+		if (state.postedFinal.has(check.name)) continue;
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) return; // budget spent: skip the remaining posts
+		const result = completed.get(check.name);
+		if (result) {
+			if (await postResult(result, state.sha, remaining))
+				state.postedFinal.add(check.name);
+			continue;
+		}
+		if (state.pendingPosted.has(`local-ci/${check.name}`))
+			await postInterrupted([check], state.sha, remaining);
+	}
+}
+
+function installSignalHandlers(state: RunState) {
+	const onSignal = () => {
+		// A second signal force-exits at once: the in-flight gh call is
+		// killed (so it cannot apply a status after the exit) and the
+		// remaining best-effort posts are skipped.
+		if (state.interrupted) {
+			killInFlightCommands();
+			process.exit(130);
+		}
+		state.interrupted = true;
+		if (state.phase === "running") {
+			// What finished before the signal: results recorded later belong
+			// to Checks the shutdown killed, which read as interrupted.
+			const completed = new Map(state.results);
+			const deadline = Date.now() + SHUTDOWN_BUDGET_MS;
+			void (async () => {
+				try {
+					// Serialize with pending posting: the in-flight pending
+					// post settles before any status that replaces it.
+					await state.pendingDone;
+					await terminateRunningChecks();
+					await postShutdownStatuses(state, completed, deadline);
+				} finally {
+					killInFlightCommands();
+					process.exit(130);
+				}
+			})();
+			return;
+		}
+		if (state.phase === "posting") return; // main() exits 130 after posting
+		killInFlightCommands();
+		process.exit(130);
+	};
+	process.on("SIGINT", onSignal);
+	process.on("SIGTERM", onSignal);
+}
+
 export async function main() {
 	try {
 		const options = parseArgs(process.argv.slice(2));
+		const stopEarlySignals = installEarlySignalHandlers();
 		const info = await preflight(options);
 		await push(info.branch, options.noPush, info.sha);
+		// The stateful handler is installed before the early one is removed,
+		// so no stretch — now or after future edits — runs on Node's default
+		// signal behavior.
+		const state: RunState = {
+			phase: "running",
+			interrupted: false,
+			toRun: [],
+			results: new Map(),
+			pendingPosted: new Set(),
+			postedFinal: new Set(),
+			pendingDone: Promise.resolve(),
+			sha: info.sha,
+		};
+		installSignalHandlers(state);
+		recordSwap("stateful-installed");
+		recordSwap("early-removed");
+		stopEarlySignals();
 		const passed = await statuses(info.sha);
 		const skipped: Result[] = info.checks
 			.filter((check) => passed.has(`local-ci/${check.name}`) && !options.force)
@@ -65,12 +225,35 @@ export async function main() {
 		const pending = info.checks.filter(
 			(check) => !passed.has(`local-ci/${check.name}`) || options.force,
 		);
+		state.toRun = pending;
 		const gitDir = await resolveGitDir();
 		const logDir = join(gitDir, "local-ci", "logs", info.sha.slice(0, 7));
 		await mkdir(logDir, { recursive: true });
-		const ran = await pMap(pending, (check) => runCheck(check, process.cwd()), {
-			concurrency: options.jobs ?? Number.POSITIVE_INFINITY,
-		});
+		const pendingPostsPromise = postPending(
+			pending,
+			info.sha,
+			(context) => state.pendingPosted.add(context),
+			() => state.interrupted,
+		);
+		state.pendingDone = pendingPostsPromise.then(
+			() => undefined,
+			() => undefined,
+		);
+		const pendingPosts = await pendingPostsPromise;
+		const ran = await pMap(
+			pending,
+			async (check) => {
+				// An interrupt stops the scheduler: an un-started Check never spawns.
+				if (state.interrupted)
+					return { check, status: "failed", duration: 0 } as Result;
+				const result = await runCheck(check, process.cwd());
+				state.results.set(check.name, result);
+				return result;
+			},
+			{ concurrency: options.jobs ?? Number.POSITIVE_INFINITY },
+		);
+		if (state.interrupted) return; // the signal handler posts and exits 130
+		state.phase = "posting";
 		for (const result of ran)
 			await writeFile(
 				join(logDir, `${result.check.name}.log`),
@@ -83,15 +266,20 @@ export async function main() {
 			console.log(
 				`0 Checks run; all ${info.checks.length} already passed on ${info.sha.slice(0, 7)}`,
 			);
+			state.phase = "done";
+			if (state.interrupted) process.exit(130);
 			return;
 		}
 		const width = Math.max(...info.checks.map((check) => check.name.length));
 		printCheckResults(all, width);
 		printFailurePreviews(ran, info.sha);
 		const posting = await postResults(ran, info.sha, info.checks.length);
+		state.phase = "done";
+		if (state.interrupted) process.exit(130);
 		if (
 			ran.some((result) => result.status === "failed") ||
-			posting.failures > 0
+			posting.failures > 0 ||
+			pendingPosts.failures > 0
 		) {
 			process.exitCode = 1;
 		}

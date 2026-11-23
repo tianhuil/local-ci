@@ -4,9 +4,17 @@ export async function resolveGitDir(cwd = process.cwd()): Promise<string> {
 	return git(["rev-parse", "--path-format=absolute", "--git-dir"], cwd);
 }
 
-export async function repoSlug(): Promise<string> {
-	const url = await git(["config", "--get", "remote.origin.url"]);
-	return url.replace(/^.*github\.com[/:]/, "").replace(/\.git$/, "");
+// Resolved once per Run: the slug cannot change mid-Run, and the shutdown
+// path must never stall resolving it again before a post. The lookup is
+// cached as a promise, failure included, so a failed lookup is attempted
+// exactly once too.
+let slugLookup: Promise<string> | undefined;
+
+export function repoSlug(): Promise<string> {
+	slugLookup ??= git(["config", "--get", "remote.origin.url"]).then((url) =>
+		url.replace(/^.*github\.com[/:]/, "").replace(/\.git$/, ""),
+	);
+	return slugLookup;
 }
 
 function isAuthFailure(text: string) {
