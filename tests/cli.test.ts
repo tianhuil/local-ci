@@ -34,7 +34,7 @@ if [ "$1" = api ]; then
     */commits/*/status*) echo '{"state":"'"${"${GH_COMBINED_STATE:-failure}"}"'","statuses":'"${"${GH_STATUSES:-[]}"}"'}'; exit 0 ;;
     */commits/*) [ "${"${GH_COMMIT_MISSING:-0}"}" = 1 ] && exit 1; echo '{}'; exit 0 ;;
     */statuses/*)
-      case "$*" in *" -f "*) [ -n "${"${GH_POST_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_POST_LOG}"}"; [ -n "${"${GH_POST_DELAY:-}"}" ] && sleep "${"${GH_POST_DELAY}"}"; [ "${"${GH_POST_FAIL:-0}"}" = 1 ] && exit 1; case "$*" in *"${"${GH_FAIL_CONTEXT:-__never__}"}"*) exit 1;; esac; echo '{}'; exit 0;; esac
+      case "$*" in *" -f "*) [ -n "${"${GH_POST_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_POST_LOG}"}"; [ -n "${"${GH_POST_DELAY:-}"}" ] && sleep "${"${GH_POST_DELAY}"}"; [ "${"${GH_POST_FAIL:-0}"}" = 1 ] && exit 1; case "$*" in *"state=pending"*) [ "${"${GH_PENDING_FAIL:-0}"}" = 1 ] && exit 1;; esac; case "$*" in *"${"${GH_FAIL_CONTEXT:-__never__}"}"*) exit 1;; esac; echo '{}'; exit 0;; esac
       exit 1 ;;
   esac
 fi
@@ -483,8 +483,14 @@ exec ${REAL_GIT} "$@"
 	test("MC-02: SIGTERM kills running Checks, posts error/interrupted for unfinished ones, and exits 130", {
 		timeout: 30000,
 	}, async () => {
-		const config =
-			'checks:\n  slow: "touch $READY/slow && sleep 9871"\n  slower: "touch $READY/slower && sleep 9872"\n';
+		// -j 2: first and stubborn run, second stays queued and must never
+		// start once the Run is interrupted. stubborn ignores SIGTERM, so only
+		// the SIGKILL escalation can end it before the exit.
+		const config = `checks:
+  first: "echo $$ > $READY/first.pid; sleep 9871"
+  stubborn: "trap '' TERM; echo $$ > $READY/stubborn.pid; sleep 9871"
+  second: "echo $$ > $READY/second.pid; sleep 9871"
+`;
 		const repo = await makeRepo(config);
 		const ready = join(
 			await mkdtemp(join(tmpdir(), "local-ci-mc02-")),
@@ -495,28 +501,67 @@ exec ${REAL_GIT} "$@"
 			await mkdtemp(join(tmpdir(), "local-ci-mc02-")),
 			"posts.log",
 		);
-		const runner = spawnCli(repo, [], { READY: ready, GH_POST_LOG: postLog });
-		// Both Checks are executing (their marker files exist) before signaling.
-		await waitUntil(
-			async () =>
-				existsSync(join(ready, "slow")) && existsSync(join(ready, "slower")),
-		);
-		runner.child.kill("SIGTERM");
-		expect(await runner.exited).toBe(130);
-		const posts = await readFile(postLog, "utf8");
-		expect(posts).toContain(
-			"-f state=error -f context=local-ci/slow -f description=interrupted",
-		);
-		expect(posts).toContain(
-			"-f state=error -f context=local-ci/slower -f description=interrupted",
-		);
-		expect(posts).not.toContain("state=success");
-		expect(posts).not.toContain("state=failure");
-		// The running Checks were killed, not left behind as orphans.
-		await sleep(200);
-		const processes = spawnSync("ps", ["-eo", "args"], { encoding: "utf8" });
-		expect(processes.stdout).not.toMatch(/sleep 987[12]/);
-		spawnSync("pkill", ["-f", "sleep 987"]); // stop anything this test started
+		const runner = spawnCli(repo, ["-j", "2"], {
+			READY: ready,
+			GH_POST_LOG: postLog,
+		});
+		// Each pid file holds its Check's process-group leader pid: Checks
+		// spawn detached, so the sh pid is the pgid.
+		const pgidOf = async (name: string): Promise<number | undefined> => {
+			const pid = Number(await readIfPresent(join(ready, `${name}.pid`)));
+			return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+		};
+		const deadGroup = (pgid: number) => {
+			try {
+				process.kill(-pgid, 0);
+				return false;
+			} catch {
+				return true;
+			}
+		};
+		let first: number | undefined;
+		let stubborn: number | undefined;
+		try {
+			await waitUntil(async () => {
+				first = await pgidOf("first");
+				stubborn = await pgidOf("stubborn");
+				return first !== undefined && stubborn !== undefined;
+			});
+			runner.child.kill("SIGTERM");
+			expect(await runner.exited).toBe(130);
+			// The queued Check never started.
+			expect(existsSync(join(ready, "second.pid"))).toBe(false);
+			// Every Check that posted pending but has no final result is
+			// interrupted, including the never-started one.
+			const posts = await readFile(postLog, "utf8");
+			expect(posts).toContain(
+				"-f state=error -f context=local-ci/first -f description=interrupted",
+			);
+			expect(posts).toContain(
+				"-f state=error -f context=local-ci/stubborn -f description=interrupted",
+			);
+			expect(posts).toContain(
+				"-f state=error -f context=local-ci/second -f description=interrupted",
+			);
+			expect(posts).not.toContain("state=success");
+			expect(posts).not.toContain("state=failure");
+			// Both running Checks are gone before the exit, the
+			// SIGTERM-ignorer included.
+			if (first !== undefined) expect(deadGroup(first)).toBe(true);
+			if (stubborn !== undefined) expect(deadGroup(stubborn)).toBe(true);
+		} finally {
+			// Stop only processes this test started, by exact process-group
+			// id, whether or not the assertions above passed.
+			for (const pgid of [first, stubborn, await pgidOf("second")]) {
+				if (pgid === undefined) continue;
+				try {
+					process.kill(-pgid, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}
+			runner.child.kill("SIGKILL");
+		}
 	});
 
 	test("MC-42: a signal while results are posting lets the in-flight posts finish and exits 130 without error posts", {
@@ -616,6 +661,17 @@ exec ${REAL_GIT} "$@"
 			"error: failed to post Commit Status local-ci/unit to GitHub; run gh auth login, then local-ci",
 		);
 		expect(result.stdout).not.toContain("posted 1 Commit Status");
+	});
+
+	test("a failed pending post fails the Run even when every Check passes", async () => {
+		const repo = await makeRepo('checks:\n  unit: "echo ok"\n');
+		const result = runCli(repo, [], { GH_PENDING_FAIL: "1" });
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(
+			"error: failed to post Commit Status local-ci/unit to GitHub; run gh auth login, then local-ci",
+		);
+		expect(result.stdout).toContain("unit  passed");
+		expect(result.stdout).toContain("posted 1 Commit Status to");
 	});
 
 	test("uses the resolved git directory for linked-worktree logs", async () => {

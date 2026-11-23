@@ -15,7 +15,12 @@ const TIMEOUT = Number(process.env.LOCAL_CI_E2E_TIMEOUT ?? "0.5");
 const PREFIX = "local-ci-e2e/";
 
 function run(cmd: string, args: string[], cwd: string) {
-	return execFileSync(cmd, args, { cwd, encoding: "utf8" }).trim();
+	return execFileSync(cmd, args, {
+		cwd,
+		encoding: "utf8",
+		// A blocked subprocess must fail, not stall polling and vitest deadlines.
+		timeout: 30000,
+	}).trim();
 }
 function repoSlug(): string {
 	if (process.env.GITHUB_REPOSITORY) return process.env.GITHUB_REPOSITORY;
@@ -120,6 +125,15 @@ function latestStatuses(sha: string): Record<string, string> {
 			}),
 	);
 }
+// A poll read that is not ready yet — the commit may not be pushed, or the
+// read transiently failed — is a retry, not a test failure.
+function latestStatusesOrNone(sha: string): Record<string, string> {
+	try {
+		return latestStatuses(sha);
+	} catch {
+		return {};
+	}
+}
 function statusCount(sha: string, context: string): number {
 	return Number(
 		run(
@@ -159,6 +173,7 @@ afterAll(() => {
 		spawnSync("git", ["push", "-q", "origin", "--delete", branch], {
 			cwd: dir,
 			encoding: "utf8",
+			timeout: 30000,
 		});
 	}
 });
@@ -173,10 +188,11 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 		const runner = localCiAsync(dir);
 		// Poll the combined status endpoint while the slow Check (timeout 8s)
 		// still runs; some local-ci/* context must read pending at least once.
+		// The first polls may race the branch push (404), so retry failed reads.
 		let pendingSeen = false;
 		const deadline = Date.now() + 30000;
 		while (!pendingSeen && Date.now() < deadline) {
-			pendingSeen = Object.entries(latestStatuses(sha)).some(
+			pendingSeen = Object.entries(latestStatusesOrNone(sha)).some(
 				([context, value]) =>
 					context.startsWith("local-ci/") && value.startsWith("pending"),
 			);
@@ -260,9 +276,11 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 		expect(
 			await eventually(
 				() => statusCount(sha, "local-ci/pass"),
-				(count) => count === 1,
+				// Each executed Check posts pending + final: 2 history entries
+				// per context after the initial Run.
+				(count) => count === 2,
 			),
-		).toBe(1);
+		).toBe(2);
 
 		result = localCi(dir, ["--force", "--no-push"]);
 		if (result.status !== 1)
@@ -274,9 +292,10 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 		expect(
 			await eventually(
 				() => statusCount(sha, "local-ci/pass"),
-				(count) => count === 2,
+				// The --force Run adds another pending + final pair: 4 entries.
+				(count) => count === 4,
 			),
-		).toBe(2);
+		).toBe(4);
 		statuses = await eventually(
 			() => latestStatuses(sha),
 			(s) => contexts.every((context) => context in s),

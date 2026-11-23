@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import pMap from "p-map";
-import { killRunningChecks, type Result, runCheck } from "./checks.js";
+import { type Result, runCheck, terminateRunningChecks } from "./checks.js";
 import { type Options, parseArgs } from "./cli.js";
 import { type Check, loadChecks } from "./config.js";
 import { push, repoSlug, resolveGitDir } from "./git.js";
@@ -58,10 +58,12 @@ async function preflight(options: Options) {
 	return { ...config, branch, sha };
 }
 
-// Signal contract: while Checks run, SIGINT/SIGTERM kills them and posts
-// error/interrupted for every Check without a final result, then exits 130;
-// while results post, the in-flight posts finish (they are final) and the Run
-// exits 130 without extra error posts. Handlers stay installed until exit.
+// Signal contract: the first SIGINT/SIGTERM stops the scheduler — no
+// un-started Check begins — kills the running Checks (SIGTERM, then SIGKILL,
+// awaited), posts error/interrupted for every Check that posted pending but
+// has no final result, and exits 130. A signal while results post lets the
+// in-flight posts finish (they are final) and exits 130 without extra error
+// posts. Handlers stay installed until exit.
 type RunState = {
 	phase: "running" | "posting" | "done";
 	interrupted: boolean;
@@ -75,13 +77,17 @@ function installSignalHandlers(state: RunState) {
 		if (state.interrupted) return;
 		state.interrupted = true;
 		if (state.phase === "running") {
-			killRunningChecks();
 			const unfinished = state.toRun.filter(
 				(check) => !state.finished.has(check.name),
 			);
-			void postInterrupted(unfinished, state.sha)
-				.catch(() => {})
-				.finally(() => process.exit(130));
+			void (async () => {
+				try {
+					await terminateRunningChecks();
+					await postInterrupted(unfinished, state.sha);
+				} finally {
+					process.exit(130);
+				}
+			})();
 			return;
 		}
 		if (state.phase === "posting") return; // main() exits 130 after posting
@@ -115,10 +121,13 @@ export async function main() {
 		const gitDir = await resolveGitDir();
 		const logDir = join(gitDir, "local-ci", "logs", info.sha.slice(0, 7));
 		await mkdir(logDir, { recursive: true });
-		await postPending(pending, info.sha);
+		const pendingPosts = await postPending(pending, info.sha);
 		const ran = await pMap(
 			pending,
 			async (check) => {
+				// An interrupt stops the scheduler: an un-started Check never spawns.
+				if (state.interrupted)
+					return { check, status: "failed", duration: 0 } as Result;
 				const result = await runCheck(check, process.cwd());
 				state.finished.add(check.name);
 				return result;
@@ -151,7 +160,8 @@ export async function main() {
 		if (state.interrupted) process.exit(130);
 		if (
 			ran.some((result) => result.status === "failed") ||
-			posting.failures > 0
+			posting.failures > 0 ||
+			pendingPosts.failures > 0
 		) {
 			process.exitCode = 1;
 		}

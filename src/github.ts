@@ -41,7 +41,11 @@ export async function statuses(sha: string): Promise<Set<string>> {
 	}
 }
 
-export async function postPending(checks: Check[], sha: string): Promise<void> {
+export async function postPending(
+	checks: Check[],
+	sha: string,
+): Promise<{ failures: number }> {
+	let failures = 0;
 	for (const check of checks) {
 		const context = `local-ci/${check.name}`;
 		try {
@@ -60,8 +64,10 @@ export async function postPending(checks: Check[], sha: string): Promise<void> {
 			console.error(
 				`error: failed to post Commit Status ${context} to GitHub; run gh auth login, then local-ci`,
 			);
+			failures += 1;
 		}
 	}
+	return { failures };
 }
 
 export async function postInterrupted(

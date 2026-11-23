@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import process from "node:process";
 import type { Check } from "./config.js";
 import { safeEnv } from "./proc.js";
@@ -12,18 +12,46 @@ export type Result = {
 	log?: string;
 };
 
-// PIDs of the detached process groups currently running a Check, so a
-// SIGINT/SIGTERM handler can kill them before posting interrupted statuses.
-const running = new Set<number>();
+// Checks currently running, so a SIGINT/SIGTERM handler can stop them
+// before posting interrupted statuses and exiting.
+const running = new Set<ChildProcess>();
+const KILL_GRACE_MS = 100;
 
-export function killRunningChecks(): void {
-	for (const pid of running) {
+// Stops every running Check and resolves only once they are all gone:
+// SIGTERM to each process group, SIGKILL to whatever survives the grace
+// period (a Check may ignore SIGTERM), then wait for every exit.
+export async function terminateRunningChecks(): Promise<void> {
+	const children = [...running];
+	const exited = new Set<ChildProcess>();
+	const closes = children.map(
+		(child) =>
+			new Promise<void>((resolve) => {
+				child.on("close", () => {
+					exited.add(child);
+					resolve();
+				});
+			}),
+	);
+	for (const child of children) {
 		try {
-			process.kill(-pid, "SIGTERM");
+			if (child.pid) process.kill(-child.pid, "SIGTERM");
 		} catch {
 			/* already exited */
 		}
 	}
+	await Promise.race([
+		Promise.all(closes),
+		new Promise((resolve) => setTimeout(resolve, KILL_GRACE_MS)),
+	]);
+	for (const child of children) {
+		if (exited.has(child)) continue;
+		try {
+			if (child.pid) process.kill(-child.pid, "SIGKILL");
+		} catch {
+			/* already exited */
+		}
+	}
+	await Promise.all(closes);
 }
 
 export function runCheck(check: Check, root: string): Promise<Result> {
@@ -36,7 +64,7 @@ export function runCheck(check: Check, root: string): Promise<Result> {
 			env: safeEnv,
 			detached: true,
 		});
-		if (child.pid) running.add(child.pid);
+		if (child.pid) running.add(child);
 		let output = "";
 		let settled = false;
 		let timedOut = false;
@@ -75,7 +103,7 @@ export function runCheck(check: Check, root: string): Promise<Result> {
 			}, 100);
 		}, check.timeout * 1000);
 		child.on("close", (code) => {
-			if (child.pid) running.delete(child.pid);
+			running.delete(child);
 			clearTimeout(timer);
 			finish(timedOut, code ?? 1);
 		});
