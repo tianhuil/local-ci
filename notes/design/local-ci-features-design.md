@@ -137,11 +137,11 @@ Changed files: `git diff --name-only $(git merge-base origin/<default> HEAD) HEA
 
 ### Phase P1 (PR 1, v0.1.1)
 
-- [ ] P1-01 Manifest + guard — done when `notes/design/local-ci-features-manifest.yml` and `tests/manifest.test.ts` exist, `enforced_phases` is `[P1]`, and `pnpm verify` is green with every P1 case present — verify: cmd: `pnpm verify` — covers: R-10
-- [ ] P1-02 `statuses()` reads combined endpoint, latest per context, `local-ci/*` only — done when a Check whose latest state is `failure` after an older `success` reruns — verify: cmd: `pnpm test` (MC-03, MC-04) — covers: R-03
-- [ ] P1-03 Post `pending`/`running…` before running; `error`/`interrupted` + exit 130 on SIGINT/SIGTERM — done when the fake `gh` log shows pending before each result, and SIGTERM posts error — verify: cmd: `pnpm test` (MC-01, MC-02) — covers: R-01, R-02
-- [ ] P1-04 e2e posts a real `pending` — done when `pnpm test:e2e` observes it on GitHub — verify: cmd: `pnpm test:e2e` (MC-05) — covers: R-01
-- [ ] P1-05 Docs, help, README, version 0.1.1; `tests/cli.test.ts` hardcoded `0.1.0` expectations updated; `tests/release.test.ts` derives its baseline tag and next version from `package.json` instead of hardcoding `v0.1.0`/`0.1.1` — done when help matches usage.md byte for byte and release tests pass at the new version — verify: cmd: `pnpm verify` (MC-21) — covers: R-10
+- [x] P1-01 Manifest + guard — done when `notes/design/local-ci-features-manifest.yml` and `tests/manifest.test.ts` exist, `enforced_phases` is `[P1]`, and `pnpm verify` is green with every P1 case present — verify: cmd: `pnpm verify` — covers: R-10
+- [x] P1-02 `statuses()` reads combined endpoint, latest per context, `local-ci/*` only — done when a Check whose latest state is `failure` after an older `success` reruns — verify: cmd: `pnpm test` (MC-03, MC-04) — covers: R-03
+- [x] P1-03 Post `pending`/`running…` before running; `error`/`interrupted` + exit 130 on SIGINT/SIGTERM — done when the fake `gh` log shows pending before each result, and SIGTERM posts error — verify: cmd: `pnpm test` (MC-01, MC-02) — covers: R-01, R-02
+- [x] P1-04 e2e posts a real `pending` — done when `pnpm test:e2e` observes it on GitHub — verify: cmd: `pnpm test:e2e` (MC-05) — covers: R-01
+- [x] P1-05 Docs, help, README, version 0.1.1; `tests/cli.test.ts` hardcoded `0.1.0` expectations updated; `tests/release.test.ts` derives its baseline tag and next version from `package.json` instead of hardcoding `v0.1.0`/`0.1.1` — done when help matches usage.md byte for byte and release tests pass at the new version — verify: cmd: `pnpm verify` (MC-21) — covers: R-10
 
 ### Phase P2 (PR 2, v0.1.2)
 
