@@ -45,7 +45,7 @@ exit 1
 	return fakeBin;
 }
 async function makeRepo(
-	config = "checks:\n  unit: echo ok\n",
+	config = "checks:\n  - name: unit\n    command: echo ok\n",
 	branch = "feature/login",
 ): Promise<Repo> {
 	const dir = await mkdtemp(join(tmpdir(), "local-ci-run-"));
@@ -202,11 +202,11 @@ describe("local-ci CLI contract", () => {
 			encoding: "utf8",
 		});
 		expect(version.status).toBe(0);
-		expect(version.stdout).toBe("0.1.2\n");
+		expect(version.stdout).toBe("0.2.0\n");
 		const shortVersion = spawnSync(process.execPath, [BIN, "-V"], {
 			encoding: "utf8",
 		});
-		expect(shortVersion.stdout).toBe("0.1.2\n");
+		expect(shortVersion.stdout).toBe("0.2.0\n");
 		const shortHelp = spawnSync(process.execPath, [BIN, "-h"], {
 			encoding: "utf8",
 		});
@@ -249,7 +249,10 @@ describe("local-ci CLI contract", () => {
 		expect(result.stderr.trim()).toBe(
 			"error: 2 uncommitted changes (src/login.ts, notes.txt); run git commit or git stash, then local-ci",
 		);
-		const main = await makeRepo("checks:\n  unit: echo ok\n", "main");
+		const main = await makeRepo(
+			"checks:\n  - name: unit\n    command: echo ok\n",
+			"main",
+		);
 		result = runCli(main);
 		expect(result.status).toBe(1);
 		expect(result.stderr.trim()).toBe(
@@ -258,11 +261,13 @@ describe("local-ci CLI contract", () => {
 	});
 
 	test("rejects unsafe check names before creating logs", async () => {
-		const repo = await makeRepo('checks:\n  "../../victim": echo bad\n');
+		const repo = await makeRepo(
+			'checks:\n  - name: "../../victim"\n    command: echo bad\n',
+		);
 		const result = runCli(repo);
 		expect(result.status).toBe(1);
 		expect(result.stderr.trim()).toBe(
-			'error: local-ci.yml: check "../../victim" has invalid name; use letters, numbers, ., _, or -',
+			'error: local-ci.yml is invalid\nchecks[0].name: "../../victim" is not a valid Check name; use letters, numbers, ., _, or -, and never ".."',
 		);
 		expect(existsSync(join(repo.dir, "..", "victim"))).toBe(false);
 	});
@@ -274,11 +279,11 @@ describe("local-ci CLI contract", () => {
 		expect(result.stderr.trim()).toBe(
 			"error: no GitHub token; run gh auth login, then local-ci",
 		);
-		const invalid = await makeRepo("checks:\n  unit:\n    timeout: 2\n");
+		const invalid = await makeRepo("checks:\n  - name: unit\n    timeout: 2\n");
 		result = runCli(invalid);
 		expect(result.status).toBe(1);
 		expect(result.stderr.trim()).toBe(
-			'error: local-ci.yml: check "unit" has no command; add one, e.g. unit: pnpm test',
+			"error: local-ci.yml is invalid\nchecks[0].command: has no command; add one, e.g. command: pnpm test",
 		);
 	});
 
@@ -340,8 +345,11 @@ exec ${REAL_GIT} "$@"
 		);
 	});
 
-	test("runs checks in parallel by default, serializes with jobs 1, and preserves output order", async () => {
-		const config = 'checks:\n  slow: "sleep 1"\n  fast: "sleep 1"\n';
+	test("runs checks in parallel by default, serializes with jobs 1, and preserves output order", {
+		timeout: 15000,
+	}, async () => {
+		const config =
+			'checks:\n  - name: slow\n    command: "sleep 1"\n  - name: fast\n    command: "sleep 1"\n';
 		const parallel = await makeRepo(config);
 		let started = Date.now();
 		let result = runCli(parallel);
@@ -372,7 +380,7 @@ exec ${REAL_GIT} "$@"
 
 	test("prints passed, failed, timeout, previews, full log, totals, and writes logs", async () => {
 		const config =
-			"timeout: 1\nchecks:\n  pass: echo passed\n  fail: >-\n    node -e \"process.stdout.write('short failure'); process.exit(3)\"\n  timeout: sleep 5\n";
+			"timeout: 1\nchecks:\n  - name: pass\n    command: echo passed\n  - name: fail\n    command: >-\n      node -e \"process.stdout.write('short failure'); process.exit(3)\"\n  - name: timeout\n    command: sleep 5\n";
 		const repo = await makeRepo(config);
 		const postLog = join(
 			await mkdtemp(join(tmpdir(), "local-ci-post-")),
@@ -399,7 +407,7 @@ exec ${REAL_GIT} "$@"
 		expect(posts).toContain("description=failed in 1s (exit 3)");
 		expect(posts).toContain("description=failed in 1s (timeout)");
 		const long = await makeRepo(
-			"checks:\n  unit: >-\n    node -e \"process.stdout.write('x'.repeat(1596)+'TAIL'); process.exit(1)\"\n",
+			"checks:\n  - name: unit\n    command: >-\n      node -e \"process.stdout.write('x'.repeat(1596)+'TAIL'); process.exit(1)\"\n",
 		);
 		const longResult = runCli(long);
 		expect(longResult.status).toBe(1);
@@ -412,7 +420,7 @@ exec ${REAL_GIT} "$@"
 
 	test("skips existing successful statuses, force reruns, and handles all-skipped totals", async () => {
 		const repo = await makeRepo(
-			'checks:\n  unit: "echo ran"\n  other: "echo other"\n',
+			'checks:\n  - name: unit\n    command: "echo ran"\n  - name: other\n    command: "echo other"\n',
 		);
 		let result = runCli(repo, [], {
 			GH_STATUSES: '[{"state":"success","context":"local-ci/unit"}]',
@@ -441,7 +449,9 @@ exec ${REAL_GIT} "$@"
 	});
 
 	test("MC-03: reruns a Check whose latest local-ci/* state is failure after an older success", async () => {
-		const repo = await makeRepo('checks:\n  unit: "echo ran"\n');
+		const repo = await makeRepo(
+			'checks:\n  - name: unit\n    command: "echo ran"\n',
+		);
 		const logs = await mkdtemp(join(tmpdir(), "local-ci-mc03-"));
 		const apiLog = join(logs, "api.log");
 		const postLog = join(logs, "posts.log");
@@ -466,7 +476,9 @@ exec ${REAL_GIT} "$@"
 	});
 
 	test("MC-04: ignores other tools' contexts and the combined top-level state when skipping", async () => {
-		const repo = await makeRepo('checks:\n  unit: "echo ran"\n');
+		const repo = await makeRepo(
+			'checks:\n  - name: unit\n    command: "echo ran"\n',
+		);
 		const apiLog = join(
 			await mkdtemp(join(tmpdir(), "local-ci-mc04-")),
 			"api.log",
@@ -487,7 +499,7 @@ exec ${REAL_GIT} "$@"
 
 	test("MC-06: --only runs and posts only the named Checks plus their dependencies", async () => {
 		const config =
-			'checks:\n  one: "echo ran-one >> $TRACE"\n  two: "echo ran-two >> $TRACE"\n  three: "echo ran-three >> $TRACE"\n';
+			'checks:\n  - name: one\n    command: "echo ran-one >> $TRACE"\n  - name: two\n    command: "echo ran-two >> $TRACE"\n  - name: three\n    command: "echo ran-three >> $TRACE"\n';
 		const repo = await makeRepo(config);
 		const dir = await mkdtemp(join(tmpdir(), "local-ci-mc06-"));
 		const trace = join(dir, "trace.log");
@@ -516,7 +528,7 @@ exec ${REAL_GIT} "$@"
 
 	test("MC-07: unknown --only name exits 2 with the exact error listing valid names", async () => {
 		const config =
-			"checks:\n  lint: echo lint\n  audit: echo audit\n  verify: echo verify\n  build: echo build\n  browser-smoke: echo smoke\n";
+			"checks:\n  - name: lint\n    command: echo lint\n  - name: audit\n    command: echo audit\n  - name: verify\n    command: echo verify\n  - name: build\n    command: echo build\n  - name: browser-smoke\n    command: echo smoke\n";
 		const repo = await makeRepo(config);
 		const postLog = join(
 			await mkdtemp(join(tmpdir(), "local-ci-mc07-")),
@@ -536,7 +548,7 @@ exec ${REAL_GIT} "$@"
 
 	test("MC-08: --only and --force combine; named Checks rerun", async () => {
 		const repo = await makeRepo(
-			'checks:\n  unit: "echo ran-unit >> $TRACE"\n  other: "echo ran-other >> $TRACE"\n',
+			'checks:\n  - name: unit\n    command: "echo ran-unit >> $TRACE"\n  - name: other\n    command: "echo ran-other >> $TRACE"\n',
 		);
 		const dir = await mkdtemp(join(tmpdir(), "local-ci-mc08-"));
 		const trace = join(dir, "trace.log");
@@ -561,7 +573,7 @@ exec ${REAL_GIT} "$@"
 
 	test("MC-09: every named Check already passed prints the zero-Checks line and exits 0", async () => {
 		const repo = await makeRepo(
-			'checks:\n  unit: "echo ran-unit"\n  other: "echo ran-other"\n',
+			'checks:\n  - name: unit\n    command: "echo ran-unit"\n  - name: other\n    command: "echo ran-other"\n',
 		);
 		const postLog = join(
 			await mkdtemp(join(tmpdir(), "local-ci-mc09-")),
@@ -590,7 +602,7 @@ exec ${REAL_GIT} "$@"
 
 	test("MC-39: the totals and posted-statuses lines count the selected closure, not the full config", async () => {
 		const repo = await makeRepo(
-			"checks:\n  pass: echo ok\n  fail: exit 3\n  other: echo other\n",
+			"checks:\n  - name: pass\n    command: echo ok\n  - name: fail\n    command: exit 3\n  - name: other\n    command: echo other\n",
 		);
 		const result = runCli(repo, ["--only", "fail,pass"], {
 			GH_STATUSES: '[{"state":"success","context":"local-ci/pass"}]',
@@ -609,7 +621,7 @@ exec ${REAL_GIT} "$@"
 
 	test("--only parsing edges: trimmed names, duplicate names, missing value, = form, repeated flags are last-wins", async () => {
 		const config =
-			'checks:\n  lint: "echo ran-lint >> $TRACE"\n  unit: "echo ran-unit >> $TRACE"\n  other: "echo ran-other >> $TRACE"\n';
+			'checks:\n  - name: lint\n    command: "echo ran-lint >> $TRACE"\n  - name: unit\n    command: "echo ran-unit >> $TRACE"\n  - name: other\n    command: "echo ran-other >> $TRACE"\n';
 		type Edge = {
 			label: string;
 			args: string[];
@@ -728,7 +740,7 @@ exec ${REAL_GIT} "$@"
 	});
 
 	test("an invalid config surfaces before --only validation, with nothing pushed or posted", async () => {
-		const repo = await makeRepo("checks:\n  unit:\n    timeout: 2\n");
+		const repo = await makeRepo("checks:\n  - name: unit\n    timeout: 2\n");
 		await installGitShim(repo, "record-push");
 		const dir = await mkdtemp(join(tmpdir(), "local-ci-only-order-"));
 		const pushLog = join(dir, "push.log");
@@ -740,7 +752,7 @@ exec ${REAL_GIT} "$@"
 		expect(result.status).toBe(1);
 		// The config error wins: exit 1, and validateOnly's message never ran.
 		expect(result.stderr.trim()).toBe(
-			'error: local-ci.yml: check "unit" has no command; add one, e.g. unit: pnpm test',
+			"error: local-ci.yml is invalid\nchecks[0].command: has no command; add one, e.g. command: pnpm test",
 		);
 		expect(result.stderr).not.toContain("--only");
 		expect(await readIfPresent(pushLog)).toBe("");
@@ -749,7 +761,7 @@ exec ${REAL_GIT} "$@"
 
 	test("MC-01: posts a pending Commit Status for every Check about to run, after push, before execution", async () => {
 		const config =
-			'checks:\n  one: "echo ran-one >> $TRACE"\n  two: "echo ran-two >> $TRACE"\n  done: "echo ran-done >> $TRACE"\n';
+			'checks:\n  - name: one\n    command: "echo ran-one >> $TRACE"\n  - name: two\n    command: "echo ran-two >> $TRACE"\n  - name: done\n    command: "echo ran-done >> $TRACE"\n';
 		const repo = await makeRepo(config);
 		await installGitShim(repo, "trace-push");
 		const trace = join(
@@ -798,9 +810,12 @@ exec ${REAL_GIT} "$@"
 		// start once the Run is interrupted. stubborn ignores SIGTERM, so only
 		// the SIGKILL escalation can end it before the exit.
 		const config = `checks:
-  first: "echo $$ > $READY/first.pid; sleep 9871"
-  stubborn: "trap '' TERM; echo $$ > $READY/stubborn.pid; sleep 9871"
-  second: "echo $$ > $READY/second.pid; sleep 9871"
+  - name: first
+    command: "echo $$ > $READY/first.pid; sleep 9871"
+  - name: stubborn
+    command: "trap '' TERM; echo $$ > $READY/stubborn.pid; sleep 9871"
+  - name: second
+    command: "echo $$ > $READY/second.pid; sleep 9871"
 `;
 		const repo = await makeRepo(config);
 		const ready = join(
@@ -882,7 +897,9 @@ exec ${REAL_GIT} "$@"
 	test("MC-42: a signal while results are posting lets the in-flight posts finish and exits 130 without error posts", {
 		timeout: 30000,
 	}, async () => {
-		const repo = await makeRepo('checks:\n  a: "echo a"\n  b: "echo b"\n');
+		const repo = await makeRepo(
+			'checks:\n  - name: a\n    command: "echo a"\n  - name: b\n    command: "echo b"\n',
+		);
 		const postLog = join(
 			await mkdtemp(join(tmpdir(), "local-ci-mc42-")),
 			"posts.log",
@@ -908,7 +925,9 @@ exec ${REAL_GIT} "$@"
 	test("a signal while a pending post is in flight lets it settle, then posts the interruption", {
 		timeout: 30000,
 	}, async () => {
-		const repo = await makeRepo('checks:\n  a: "echo a"\n  b: "echo b"\n');
+		const repo = await makeRepo(
+			'checks:\n  - name: a\n    command: "echo a"\n  - name: b\n    command: "echo b"\n',
+		);
 		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
 		const postLog = join(dir, "posts.log");
 		const applyLog = join(dir, "applies.log");
@@ -949,7 +968,7 @@ exec ${REAL_GIT} "$@"
 		timeout: 30000,
 	}, async () => {
 		const config =
-			'checks:\n  quick: "echo quick-done >> $TRACE"\n  slow: "echo $$ > $READY/slow.pid; sleep 9871"\n';
+			'checks:\n  - name: quick\n    command: "echo quick-done >> $TRACE"\n  - name: slow\n    command: "echo $$ > $READY/slow.pid; sleep 9871"\n';
 		const repo = await makeRepo(config);
 		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
 		const ready = join(dir, "ready");
@@ -1000,7 +1019,7 @@ exec ${REAL_GIT} "$@"
 		timeout: 30000,
 	}, async () => {
 		const repo = await makeRepo(
-			'checks:\n  only: "echo $$ > $READY/only.pid; sleep 9871"\n',
+			'checks:\n  - name: only\n    command: "echo $$ > $READY/only.pid; sleep 9871"\n',
 		);
 		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
 		const ready = join(dir, "ready");
@@ -1102,7 +1121,7 @@ exec ${REAL_GIT} "$@"
 		timeout: 60000,
 	}, async () => {
 		const config =
-			'checks:\n  a: "echo $$ > $READY/a.pid; sleep 9871"\n  b: "echo $$ > $READY/b.pid; sleep 9871"\n  c: "echo $$ > $READY/c.pid; sleep 9871"\n';
+			'checks:\n  - name: a\n    command: "echo $$ > $READY/a.pid; sleep 9871"\n  - name: b\n    command: "echo $$ > $READY/b.pid; sleep 9871"\n  - name: c\n    command: "echo $$ > $READY/c.pid; sleep 9871"\n';
 		const repo = await makeRepo(config);
 		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
 		const ready = join(dir, "ready");
@@ -1277,7 +1296,9 @@ exec ${REAL_GIT} "$@"
 	});
 
 	test("the repository slug is resolved once per Run, not once per post", async () => {
-		const repo = await makeRepo('checks:\n  a: "echo a"\n  b: "echo b"\n');
+		const repo = await makeRepo(
+			'checks:\n  - name: a\n    command: "echo a"\n  - name: b\n    command: "echo b"\n',
+		);
 		await installGitShim(repo, "count-slug");
 		const slugLog = join(
 			await mkdtemp(join(tmpdir(), "local-ci-sig-")),
@@ -1354,7 +1375,9 @@ exec ${REAL_GIT} "$@"
 	});
 
 	test("reports partial posting failures without corrupting check totals", async () => {
-		const repo = await makeRepo("checks:\n  a: echo a\n  b: echo b\n");
+		const repo = await makeRepo(
+			"checks:\n  - name: a\n    command: echo a\n  - name: b\n    command: echo b\n",
+		);
 		const postLog = join(
 			await mkdtemp(join(tmpdir(), "local-ci-post-")),
 			"posts.log",
@@ -1386,7 +1409,9 @@ exec ${REAL_GIT} "$@"
 	});
 
 	test("a failed pending post fails the Run even when every Check passes", async () => {
-		const repo = await makeRepo('checks:\n  unit: "echo ok"\n');
+		const repo = await makeRepo(
+			'checks:\n  - name: unit\n    command: "echo ok"\n',
+		);
 		const result = runCli(repo, [], { GH_PENDING_FAIL: "1" });
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain(
@@ -1396,8 +1421,97 @@ exec ${REAL_GIT} "$@"
 		expect(result.stdout).toContain("posted 1 Commit Status to");
 	});
 
+	test("MC-11 MC-18 MC-19 MC-20 MC-40 MC-41: schedules dependencies, blocks failures, and reruns required dependencies", async () => {
+		const config = `checks:
+  - name: base
+    command: exit 2
+  - name: other
+    command: echo other
+  - name: dependent
+    command: echo dependent
+    depends_on: [base, other]
+  - name: transitive
+    command: echo transitive
+    depends_on: [dependent]
+`;
+		const repo = await makeRepo(config);
+		const result = runCli(repo, ["--jobs", "1"]);
+		expect(result.status).toBe(1);
+		expect(result.stdout).toContain("dependent   blocked  depends on base");
+		expect(result.stdout).toContain(
+			"transitive  blocked  depends on dependent",
+		);
+		expect(result.stdout).toContain("posted 4 Commit Statuses");
+		const rerun = await makeRepo(`checks:
+  - name: base
+    command: echo base
+  - name: unit
+    command: echo unit
+    depends_on: [base]
+`);
+		const rerunResult = runCli(rerun, [], {
+			GH_STATUSES: '[{"state":"success","context":"local-ci/base"}]',
+		});
+		expect(rerunResult.status).toBe(0);
+		expect(rerunResult.stdout).toContain("base  passed");
+	});
+
+	test("MC-12 MC-13 MC-14 MC-15 MC-16 MC-17 MC-33 MC-34 MC-35 MC-36 MC-37 MC-38: rejects invalid list configurations with paths and fixes", {
+		timeout: 30000,
+	}, async () => {
+		const cases = [
+			[
+				"checks:\n  unit: echo old\n",
+				"checks must be a list; see usage.md for the list form",
+			],
+			[
+				"checks:\n  - name: unit\n    command: echo ok\n    depends-on: [base]\n",
+				"unknown field",
+			],
+			[
+				"checks:\n  - name: unit\n    command: echo a\n  - name: unit\n    command: echo b\n",
+				"listed twice",
+			],
+			[
+				"checks:\n  - name: unit\n    command: echo ok\n    depends_on: [missing]\n",
+				"not a Check",
+			],
+			[
+				"checks:\n  - name: unit\n    command: echo ok\n    depends_on: [unit]\n",
+				"Check itself",
+			],
+			[
+				"checks:\n  - name: unit\n    command: echo ok\n    depends_on: [build]\n  - name: build\n    command: echo ok\n    depends_on: [unit]\n",
+				"depends_on cycle",
+			],
+			["checks:\n  - name: bad name\n    command: '   '\n", "valid Check name"],
+			["checks:\n  - name: unit\n    command: '   '\n", "has no command"],
+			[
+				"timeout: 0\nchecks:\n  - name: unit\n    command: echo ok\n",
+				"positive finite",
+			],
+			["checks: []\n", "at least one Check"],
+			[
+				"bogus: true\nchecks:\n  - name: unit\n    command: echo ok\n",
+				"unknown field",
+			],
+			[
+				"checks:\n  - name: unit\n    command: echo ok\n    depends_on: nope\n",
+				"depends_on must be a list",
+			],
+		] as const;
+		for (const [config, message] of cases) {
+			const repo = await makeRepo(config);
+			const result = runCli(repo);
+			expect(result.status).toBe(1);
+			expect(result.stderr).toContain(message);
+		}
+	});
+
 	test("uses the resolved git directory for linked-worktree logs", async () => {
-		const root = await makeRepo('checks:\n  unit: "echo linked"\n');
+		const root = await makeRepo(
+			'checks:\n  - name: unit\n    command: "echo linked"\n',
+		);
 		const linked = join(root.dir, "linked");
 		git(["worktree", "add", "-qb", "linked-branch", linked], root.dir);
 		const result = runCli({ ...root, dir: linked });

@@ -1,8 +1,11 @@
 timeout: 60
 checks:
-  lint: pnpm lint
-  typecheck: pnpm typecheck
-  unit:
+  - name: lint
+    command: pnpm lint
+  - name: typecheck
+    command: pnpm typecheck
+  - name: unit
     command: vitest run
     timeout: 300
-  build: pnpm build
+  - name: build
+    command: pnpm build

@@ -10,6 +10,11 @@ type CommitStatus = { state: "success"; context: string };
 const POST_TIMEOUT_MS = 10_000;
 
 function statusFor(result: Result): { state: string; description: string } {
+	if (result.status === "blocked")
+		return {
+			state: "failure",
+			description: `not run; depends on ${(result.blockedOn ?? []).join(", ")}`,
+		};
 	const state = result.status === "passed" ? "success" : "failure";
 	const description =
 		result.status === "passed"
@@ -189,7 +194,7 @@ export async function postResults(
 		}
 	}
 	const checkFailures = results.filter(
-		(result) => result.status === "failed",
+		(result) => result.status === "failed" || result.status === "blocked",
 	).length;
 	if (posted > 0) {
 		console.log(

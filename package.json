@@ -1,6 +1,6 @@
 {
 	"name": "local-ci",
-	"version": "0.1.2",
+	"version": "0.2.0",
 	"private": true,
 	"license": "MIT",
 	"type": "module",
@@ -26,8 +26,8 @@
 		"prepare": "husky"
 	},
 	"dependencies": {
-		"p-map": "^7.0.2",
-		"yaml": "^2.6.1"
+		"yaml": "^2.6.1",
+		"zod": "^4.6.7"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.6.8",
