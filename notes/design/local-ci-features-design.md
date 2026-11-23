@@ -31,29 +31,29 @@ Invariants:
 
 ## Requirements and Ownership
 
-| ID | Observable outcome | Owner | Source of truth | Verification | Severity |
-|----|--------------------|-------|-----------------|--------------|----------|
-| R-01 | `pending` posted for every Check about to run, after push, before execution | `src/github.ts` | this design §P1 | `tests/cli.test.ts` MC-01 | High |
-| R-02 | SIGINT/SIGTERM: kill Checks, post `error`/`interrupted` for unfinished, exit 130 | `src/index.ts` | this design §P1 | MC-02 | High |
-| R-03 | Skip decision uses only the latest status per `local-ci/*` context | `src/github.ts` | this design §P1 | MC-03, MC-04 | High |
-| R-04 | `--only` runs/posts named Checks plus their dependencies; others untouched | `src/cli.ts`, `src/index.ts` | this design §P2 | MC-06, MC-08 | High |
-| R-05 | Unknown `--only` name: exit 2, exact error listing valid names | `src/cli.ts` | this design §P2 | MC-07 | Medium |
-| R-06 | List-form config validates via zod with fix-it messages, one issue per line | `src/config.ts` | this design §P3 | MC-11–MC-17 | High |
-| R-07 | v0.1.0 map form fails with `checks must be a list; see usage.md for the list form` | `src/config.ts` | this design §P3 | MC-12 | High |
-| R-08 | Dependent starts when dependencies passed; never more than `--jobs` at once; blocked Dependent posts `failure` and exits 1 | `src/index.ts` | this design §P3 | MC-18–MC-20 | High |
-| R-09 | `run_if_changed` Check runs only when a changed file matches; skips post `success` | `src/config.ts`, `src/index.ts` | this design §P4 | MC-22–MC-27 | High |
-| R-10 | Each PR: version bump, README, usage.md, help text, tests synchronized | every PR | this design | `pnpm verify`; MC-21 | High |
+| ID   | Observable outcome                                                                                                         | Owner                           | Source of truth | Verification              | Severity |
+| ---- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------- | --------------- | ------------------------- | -------- |
+| R-01 | `pending` posted for every Check about to run, after push, before execution                                                | `src/github.ts`                 | this design §P1 | `tests/cli.test.ts` MC-01 | High     |
+| R-02 | SIGINT/SIGTERM: kill Checks, post `error`/`interrupted` for unfinished, exit 130                                           | `src/index.ts`                  | this design §P1 | MC-02                     | High     |
+| R-03 | Skip decision uses only the latest status per `local-ci/*` context                                                         | `src/github.ts`                 | this design §P1 | MC-03, MC-04              | High     |
+| R-04 | `--only` runs/posts named Checks plus their dependencies; others untouched                                                 | `src/cli.ts`, `src/index.ts`    | this design §P2 | MC-06, MC-08              | High     |
+| R-05 | Unknown `--only` name: exit 2, exact error listing valid names                                                             | `src/cli.ts`                    | this design §P2 | MC-07                     | Medium   |
+| R-06 | List-form config validates via zod with fix-it messages, one issue per line                                                | `src/config.ts`                 | this design §P3 | MC-11–MC-17               | High     |
+| R-07 | v0.1.0 map form fails with `checks must be a list; see usage.md for the list form`                                         | `src/config.ts`                 | this design §P3 | MC-12                     | High     |
+| R-08 | Dependent starts when dependencies passed; never more than `--jobs` at once; blocked Dependent posts `failure` and exits 1 | `src/index.ts`                  | this design §P3 | MC-18–MC-20               | High     |
+| R-09 | `run_if_changed` Check runs only when a changed file matches; skips post `success`                                         | `src/config.ts`, `src/index.ts` | this design §P4 | MC-22–MC-27               | High     |
+| R-10 | Each PR: version bump, README, usage.md, help text, tests synchronized                                                     | every PR                        | this design     | `pnpm verify`; MC-21      | High     |
 
 ## Technical Design
 
 ### PR order
 
-| PR | Feature | Depends on | Version |
-| -- | ------- | ---------- | ------- |
-| 1 | #3 pending Commit Status + latest-status-per-Check read | — | 0.1.1 |
-| 2 | #5 `--only` subset | — | 0.1.2 |
-| 3 | #1 Checks as list with `depends_on` | PR 2 (shares "which Checks run") | 0.2.0 |
-| 4 | #2 `run_if_changed` | PR 3 | 0.2.1 |
+| PR  | Feature                                                 | Depends on                       | Version |
+| --- | ------------------------------------------------------- | -------------------------------- | ------- |
+| 1   | #3 pending Commit Status + latest-status-per-Check read | —                                | 0.1.1   |
+| 2   | #5 `--only` subset                                      | —                                | 0.1.2   |
+| 3   | #1 Checks as list with `depends_on`                     | PR 2 (shares "which Checks run") | 0.2.0   |
+| 4   | #2 `run_if_changed`                                     | PR 3                             | 0.2.1   |
 
 PR 1 goes first because later PRs rely on its bug fix (R-03).
 
@@ -97,19 +97,19 @@ Changed files: `git diff --name-only $(git merge-base origin/<default> HEAD) HEA
 
 ### State and Mode Matrix
 
-| Mode | Runs | Posts | Exit |
-| ---- | ---- | ----- | ---- |
-| default | Checks not already passed | pending → result; path-skipped → `success`/`no matching changes`; already-passed → nothing | 0/1 |
-| `--force` | everything not path-skipped | pending → result; path-skipped → `success` | 0/1 |
-| `--only` | named + dependencies (dep-of-named forced by invariant 2) | only those; totals use the selected closure | 0/1 |
-| `--only --force` | named + dependencies, rerun (path filter still applies) | only those | 0/1 |
-| every selected Check already passed | none | none | 0, prints `0 Checks run; all N already passed on <sha>` |
-| every Check path-skipped | none | `success`/`no matching changes` per Check | 0 |
-| dependency failed or blocked | Dependents don't run | `failure`/`not run; depends on <names>` | 1 |
-| SIGINT/SIGTERM while running | killed | `error`/`interrupted` for unfinished | 130 |
-| SIGINT/SIGTERM while posting | posting finishes | in-flight results stand | 130 |
-| unknown `--only` name | nothing | nothing | 2 |
-| map-form config | nothing | nothing | 1, `checks must be a list; …` |
+| Mode                                | Runs                                                      | Posts                                                                                      | Exit                                                    |
+| ----------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| default                             | Checks not already passed                                 | pending → result; path-skipped → `success`/`no matching changes`; already-passed → nothing | 0/1                                                     |
+| `--force`                           | everything not path-skipped                               | pending → result; path-skipped → `success`                                                 | 0/1                                                     |
+| `--only`                            | named + dependencies (dep-of-named forced by invariant 2) | only those; totals use the selected closure                                                | 0/1                                                     |
+| `--only --force`                    | named + dependencies, rerun (path filter still applies)   | only those                                                                                 | 0/1                                                     |
+| every selected Check already passed | none                                                      | none                                                                                       | 0, prints `0 Checks run; all N already passed on <sha>` |
+| every Check path-skipped            | none                                                      | `success`/`no matching changes` per Check                                                  | 0                                                       |
+| dependency failed or blocked        | Dependents don't run                                      | `failure`/`not run; depends on <names>`                                                    | 1                                                       |
+| SIGINT/SIGTERM while running        | killed                                                    | `error`/`interrupted` for unfinished                                                       | 130                                                     |
+| SIGINT/SIGTERM while posting        | posting finishes                                          | in-flight results stand                                                                    | 130                                                     |
+| unknown `--only` name               | nothing                                                   | nothing                                                                                    | 2                                                       |
+| map-form config                     | nothing                                                   | nothing                                                                                    | 1, `checks must be a list; …`                           |
 
 ## Required-Case Manifest
 
@@ -117,15 +117,15 @@ Changed files: `git diff --name-only $(git merge-base origin/<default> HEAD) HEA
 
 ## External-Assumption Register
 
-| Assumption | Probe / citation | Result | Policy if false |
-| ----------- | ---------------- | ------ | --------------- |
-| `pending` is a valid Commit Status state | GitHub REST docs, Commit Statuses | documented | none expected; e2e covers |
-| `commits/{sha}/status` returns latest state per context | observed 2026-11-22, `gh` 2.97.0, mockatoo commit `130d045` (`total_count: 2` after 4 history entries) | observed, undocumented | P1 e2e fails; fall back to newest-first history + last-state-wins fold |
-| `per_page` default 30, cap 100; history newest-first | GitHub REST docs | documented | always pass `per_page=100` |
-| ≤1,000 statuses per SHA and context | GitHub docs | documented | `pending` doubles posts → 500 Runs per Check per SHA to cap; accept |
-| `gh api` passes `-f state=pending` through | observed via `gh` 2.97.0 | observed | e2e covers |
-| `picomatch` matches Actions `paths` semantics incl. `!` ordering | **unverified** | P4 probe: unit tests against Actions-documented examples | divergence on documented examples blocks P4: owner picks documented-subset semantics or a custom matcher |
-| `z.prettifyError` fits local-ci error style (multi-line) | **unverified** | P3 decides against usage.md's error table | format issues manually, same content |
+| Assumption                                                       | Probe / citation                                                                                       | Result                                                   | Policy if false                                                                                          |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `pending` is a valid Commit Status state                         | GitHub REST docs, Commit Statuses                                                                      | documented                                               | none expected; e2e covers                                                                                |
+| `commits/{sha}/status` returns latest state per context          | observed 2026-11-22, `gh` 2.97.0, mockatoo commit `130d045` (`total_count: 2` after 4 history entries) | observed, undocumented                                   | P1 e2e fails; fall back to newest-first history + last-state-wins fold                                   |
+| `per_page` default 30, cap 100; history newest-first             | GitHub REST docs                                                                                       | documented                                               | always pass `per_page=100`                                                                               |
+| ≤1,000 statuses per SHA and context                              | GitHub docs                                                                                            | documented                                               | `pending` doubles posts → 500 Runs per Check per SHA to cap; accept                                      |
+| `gh api` passes `-f state=pending` through                       | observed via `gh` 2.97.0                                                                               | observed                                                 | e2e covers                                                                                               |
+| `picomatch` matches Actions `paths` semantics incl. `!` ordering | **unverified**                                                                                         | P4 probe: unit tests against Actions-documented examples | divergence on documented examples blocks P4: owner picks documented-subset semantics or a custom matcher |
+| `z.prettifyError` fits local-ci error style (multi-line)         | **unverified**                                                                                         | P3 decides against usage.md's error table                | format issues manually, same content                                                                     |
 
 ## Evidence and Provenance
 
@@ -136,6 +136,7 @@ Changed files: `git diff --name-only $(git merge-base origin/<default> HEAD) HEA
 ## Implementation Plan
 
 ### Phase P1 (PR 1, v0.1.1)
+
 - [ ] P1-01 Manifest + guard — done when `notes/design/local-ci-features-manifest.yml` and `tests/manifest.test.ts` exist, `enforced_phases` is `[P1]`, and `pnpm verify` is green with every P1 case present — verify: cmd: `pnpm verify` — covers: R-10
 - [ ] P1-02 `statuses()` reads combined endpoint, latest per context, `local-ci/*` only — done when a Check whose latest state is `failure` after an older `success` reruns — verify: cmd: `pnpm test` (MC-03, MC-04) — covers: R-03
 - [ ] P1-03 Post `pending`/`running…` before running; `error`/`interrupted` + exit 130 on SIGINT/SIGTERM — done when the fake `gh` log shows pending before each result, and SIGTERM posts error — verify: cmd: `pnpm test` (MC-01, MC-02) — covers: R-01, R-02
@@ -143,16 +144,19 @@ Changed files: `git diff --name-only $(git merge-base origin/<default> HEAD) HEA
 - [ ] P1-05 Docs, help, README, version 0.1.1; `tests/cli.test.ts` hardcoded `0.1.0` expectations updated; `tests/release.test.ts` derives its baseline tag and next version from `package.json` instead of hardcoding `v0.1.0`/`0.1.1` — done when help matches usage.md byte for byte and release tests pass at the new version — verify: cmd: `pnpm verify` (MC-21) — covers: R-10
 
 ### Phase P2 (PR 2, v0.1.2)
+
 - [ ] P2-01 `--only` parsing, subset selection, skip/force interaction, exact unknown-name error, positional still an error — done when MC-06…MC-10 pass and P2 is appended to `enforced_phases` — verify: cmd: `pnpm test` — covers: R-04, R-05
 - [ ] P2-02 Docs, help, README, version 0.1.2; "Not yet decided" subset bullet removed — verify: cmd: `pnpm verify` — covers: R-10
 
 ### Phase P3 (PR 3, v0.2.0)
+
 - [ ] P3-01 zod schemas, messages, `z.infer` Check type; local-ci's own `local-ci.yml` in list form — done when MC-11…MC-17 pass — verify: cmd: `pnpm test` — covers: R-06, R-07
 - [ ] P3-02 Scheduler with `depends_on`, `--jobs` cap, list-order starts and output; blocked semantics — done when MC-18…MC-20 pass and P3 is appended to `enforced_phases` — verify: cmd: `pnpm test` — covers: R-08
 - [ ] P3-03 Decide `z.prettifyError` vs manual formatting; update usage.md error table — done when the invalid-config row matches the shipped output — verify: review: error output matches the documented row
 - [ ] P3-04 Docs, help, README, version 0.2.0 — verify: cmd: `pnpm verify` (MC-21) — covers: R-10
 
 ### Phase P4 (PR 4, v0.2.1)
+
 - [ ] P4-01 Probe picomatch against Actions `paths` examples; record result in the register — verify: review: probe tests cited, register updated
 - [ ] P4-02 `run_if_changed` schema + changed-files diff + skip posts — done when MC-22…MC-27 pass and P4 is appended to `enforced_phases` — verify: cmd: `pnpm test` — covers: R-09
 - [ ] P4-03 Docs, help, README, version 0.2.1 — verify: cmd: `pnpm verify` — covers: R-10
