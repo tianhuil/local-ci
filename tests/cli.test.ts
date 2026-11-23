@@ -1513,6 +1513,9 @@ exec ${REAL_GIT} "$@"
   - name: source
     command: "echo source"
     run_if_changed: ["src/**", "!src/generated/**"]
+  - name: generated
+    command: "touch generated-ran"
+    run_if_changed: ["src/generated/**", "!src/generated/**"]
   - name: docs
     command: "echo docs"
     run_if_changed: ["docs/**"]
@@ -1531,10 +1534,13 @@ exec ${REAL_GIT} "$@"
 		);
 		const result = runCli(repo, ["--force"], { GH_POST_LOG: postLog });
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain("source  passed");
-		expect(result.stdout).toContain("docs    skipped  no matching changes");
+		expect(result.stdout).toMatch(/source\s+passed/);
+		expect(result.stdout).toMatch(/generated\s+skipped {2}no matching changes/);
+		expect(result.stdout).toMatch(/docs\s+skipped {2}no matching changes/);
+		expect(existsSync(join(repo.dir, "generated-ran"))).toBe(false);
 		const posts = await readFile(postLog, "utf8");
-		expect(posts).toContain("context=local-ci/docs");
+		expect(posts).toContain("state=success");
+		expect(posts).toContain("context=local-ci/generated");
 		expect(posts).toContain("description=no matching changes");
 		const empty = await makeRepo(
 			`checks:\n  - name: empty\n    command: echo bad\n    run_if_changed: []\n`,
@@ -1546,6 +1552,32 @@ exec ${REAL_GIT} "$@"
 		);
 	});
 
+	test("MC-27: stale origin/main only causes extra Checks to run", async () => {
+		const repo = await makeRepo(
+			`checks:\n  - name: base\n    command: echo base\n    run_if_changed: [docs/**]\n  - name: source\n    command: echo source\n    run_if_changed: [src/**]\n`,
+		);
+		const branchPoint = repo.sha;
+		git(["branch", "main", branchPoint], repo.dir);
+		git(["switch", "main"], repo.dir);
+		await mkdir(join(repo.dir, "docs"));
+		await writeFile(join(repo.dir, "docs/base.md"), "base");
+		git(["add", "."], repo.dir);
+		git(["commit", "-qm", "default branch change"], repo.dir);
+		git(["push", "-q", "origin", "main"], repo.dir);
+		git(["switch", "-C", "feature/login", "main"], repo.dir);
+		await mkdir(join(repo.dir, "src"));
+		await writeFile(join(repo.dir, "src/app.ts"), "source");
+		git(["add", "."], repo.dir);
+		git(["commit", "-qm", "source change"], repo.dir);
+		// Make origin/main stale: the actual branch point contains docs/base.md,
+		// but origin/main is reset to the original commit.
+		git(["push", "-qf", "origin", `${branchPoint}:refs/heads/main`], repo.dir);
+		const result = runCli(repo, ["--force"]);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toMatch(/base\s+passed/);
+		expect(result.stdout).toMatch(/source\s+passed/);
+	});
+
 	test("MC-25: no merge base runs every path-filtered Check", async () => {
 		const repo = await makeRepo(
 			`checks:\n  - name: filtered\n    command: echo ran\n    run_if_changed: [docs/**]\n`,
@@ -1555,7 +1587,64 @@ exec ${REAL_GIT} "$@"
 		expect(result.stdout).toContain("filtered  passed");
 	});
 
-	test("MC-28 MC-31 MC-32: precedence and dependency rerun", async () => {
+	test("MC-28: already-passed filtered Check posts nothing", async () => {
+		const repo = await makeRepo(
+			`checks:\n  - name: docs\n    command: echo docs\n    run_if_changed: [docs/**]\n`,
+		);
+		git(["push", "-q", "origin", "HEAD:refs/heads/main"], repo.dir);
+		await writeFile(join(repo.dir, "other.txt"), "unrelated");
+		git(["add", "."], repo.dir);
+		git(["commit", "-qm", "unrelated change"], repo.dir);
+		const postLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-p4-passed-")),
+			"posts",
+		);
+		const result = runCli(repo, [], {
+			GH_STATUSES: '[{"state":"success","context":"local-ci/docs"}]',
+			GH_POST_LOG: postLog,
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("0 Checks run; all 1 already passed");
+		expect(result.stdout).not.toContain("no matching changes");
+		expect(await readIfPresent(postLog)).toBe("");
+	});
+
+	test("MC-29: every Check path-skipped posts success without all-already-passed", async () => {
+		const repo = await makeRepo(
+			`checks:\n  - name: docs\n    command: echo docs\n    run_if_changed: [docs/**]\n  - name: source\n    command: echo source\n    run_if_changed: [src/**]\n`,
+		);
+		git(["push", "-q", "origin", "HEAD:refs/heads/main"], repo.dir);
+		await writeFile(join(repo.dir, "other.txt"), "unrelated");
+		git(["add", "."], repo.dir);
+		git(["commit", "-qm", "unrelated change"], repo.dir);
+		const postLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-p4-all-skipped-")),
+			"posts",
+		);
+		const result = runCli(repo, [], { GH_POST_LOG: postLog });
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("no matching changes");
+		expect(result.stdout).not.toContain("already passed on");
+		const posts = await readFile(postLog, "utf8");
+		expect(posts.match(/state=success/g)?.length).toBe(2);
+	});
+
+	test("MC-31: --only applies run_if_changed to a nonmatching selected Check", async () => {
+		const repo = await makeRepo(
+			`checks:\n  - name: docs\n    command: echo docs\n    run_if_changed: [docs/**]\n  - name: source\n    command: echo source\n    run_if_changed: [src/**]\n`,
+		);
+		git(["push", "-q", "origin", "HEAD:refs/heads/main"], repo.dir);
+		await mkdir(join(repo.dir, "docs"));
+		await writeFile(join(repo.dir, "docs/readme.md"), "docs");
+		git(["add", "."], repo.dir);
+		git(["commit", "-qm", "docs change"], repo.dir);
+		const result = runCli(repo, ["--only", "source"]);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toMatch(/source\s+skipped {2}no matching changes/);
+		expect(result.stdout).not.toMatch(/docs\s+(passed|skipped)/);
+	});
+
+	test("MC-32: precedence and dependency rerun", async () => {
 		const repo = await makeRepo(
 			`checks:\n  - name: build\n    command: echo build\n    run_if_changed: [src/**]\n  - name: unit\n    command: echo unit\n    depends_on: [build]\n    run_if_changed: [tests/**]\n`,
 		);
