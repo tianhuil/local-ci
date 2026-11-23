@@ -293,14 +293,14 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 			dir,
 		);
 		expect(head.startsWith(sha)).toBe(true);
-		const contexts = [
-			"local-ci/fail",
-			"local-ci/pass",
-			"local-ci/slow",
-		] as const;
+		const finals = {
+			"local-ci/fail": /^failure: failed in \d+s \(exit 1\)$/,
+			"local-ci/pass": /^success: passed in \d+s$/,
+			"local-ci/slow": /^failure: failed in \d+s \(timeout\)$/,
+		} as const;
 		let statuses = await eventually(
 			() => latestStatuses(sha),
-			(s) => contexts.every((context) => context in s),
+			(s) => finalStatusesReady(s, finals),
 		);
 		expect(statuses["local-ci/pass"]).toMatch(/^success: passed in \d+s$/);
 		expect(statuses["local-ci/fail"]).toMatch(
@@ -345,7 +345,7 @@ describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
 		).toBe(4);
 		statuses = await eventually(
 			() => latestStatuses(sha),
-			(s) => contexts.every((context) => context in s),
+			(s) => finalStatusesReady(s, finals),
 		);
 		expect(Object.keys(statuses).sort()).toEqual([
 			"local-ci/fail",
