@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
@@ -74,6 +75,19 @@ function installEarlySignalHandlers(): () => void {
 		process.off("SIGINT", onSignal);
 		process.off("SIGTERM", onSignal);
 	};
+}
+
+// Test seam: records the handler-swap order, so a test can prove the
+// stateful handler is installed before the early one is removed and no
+// stretch runs on Node's default signal behavior.
+function recordSwap(step: string): void {
+	const log = process.env.LOCAL_CI_SWAP_LOG;
+	if (!log) return;
+	try {
+		appendFileSync(log, `${step}\n`);
+	} catch {
+		/* test-only log */
+	}
 }
 
 // All shutdown posts share one global budget, so a Run with many Checks
@@ -168,7 +182,9 @@ export async function main() {
 		const stopEarlySignals = installEarlySignalHandlers();
 		const info = await preflight(options);
 		await push(info.branch, options.noPush, info.sha);
-		stopEarlySignals();
+		// The stateful handler is installed before the early one is removed,
+		// so no stretch — now or after future edits — runs on Node's default
+		// signal behavior.
 		const state: RunState = {
 			phase: "running",
 			interrupted: false,
@@ -180,6 +196,9 @@ export async function main() {
 			sha: info.sha,
 		};
 		installSignalHandlers(state);
+		recordSwap("stateful-installed");
+		recordSwap("early-removed");
+		stopEarlySignals();
 		const passed = await statuses(info.sha);
 		const skipped: Result[] = info.checks
 			.filter((check) => passed.has(`local-ci/${check.name}`) && !options.force)

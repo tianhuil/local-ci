@@ -4,9 +4,16 @@ export async function resolveGitDir(cwd = process.cwd()): Promise<string> {
 	return git(["rev-parse", "--path-format=absolute", "--git-dir"], cwd);
 }
 
+// Resolved once per Run: the slug cannot change mid-Run, and the shutdown
+// path must never stall resolving it again before a post.
+let cachedSlug: string | undefined;
+
 export async function repoSlug(): Promise<string> {
-	const url = await git(["config", "--get", "remote.origin.url"]);
-	return url.replace(/^.*github\.com[/:]/, "").replace(/\.git$/, "");
+	if (cachedSlug === undefined) {
+		const url = await git(["config", "--get", "remote.origin.url"]);
+		cachedSlug = url.replace(/^.*github\.com[/:]/, "").replace(/\.git$/, "");
+	}
+	return cachedSlug;
 }
 
 function isAuthFailure(text: string) {

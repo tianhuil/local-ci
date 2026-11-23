@@ -34,7 +34,7 @@ if [ "$1" = api ]; then
     */commits/*/status*) echo '{"state":"'"${"${GH_COMBINED_STATE:-failure}"}"'","statuses":'"${"${GH_STATUSES:-[]}"}"'}'; exit 0 ;;
     */commits/*) [ "${"${GH_COMMIT_MISSING:-0}"}" = 1 ] && exit 1; echo '{}'; exit 0 ;;
     */statuses/*)
-      case "$*" in *" -f "*) [ -n "${"${GH_POST_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_POST_LOG}"}"; [ -n "${"${GH_POST_DELAY:-}"}" ] && sleep "${"${GH_POST_DELAY}"}"; case "$*" in *"state=pending"*) [ -n "${"${GH_PENDING_DELAY:-}"}" ] && sleep "${"${GH_PENDING_DELAY}"}";; esac; case "$*" in *"state=error"*) [ -n "${"${GH_ERROR_DELAY:-}"}" ] && sleep "${"${GH_ERROR_DELAY}"}";; esac; [ "${"${GH_POST_FAIL:-0}"}" = 1 ] && exit 1; case "$*" in *"state=pending"*) [ "${"${GH_PENDING_FAIL:-0}"}" = 1 ] && exit 1;; esac; case "$*" in *"${"${GH_FAIL_CONTEXT:-__never__}"}"*) exit 1;; esac; [ -n "${"${GH_APPLY_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_APPLY_LOG}"}"; echo '{}'; exit 0;; esac
+      case "$*" in *" -f "*) [ -n "${"${GH_POST_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_POST_LOG}"}"; [ -n "${"${GH_POST_DELAY:-}"}" ] && sleep "${"${GH_POST_DELAY}"}"; case "$*" in *"state=pending"*) [ -n "${"${GH_PENDING_DELAY:-}"}" ] && sleep "${"${GH_PENDING_DELAY}"}";; esac; case "$*" in *"state=error"*) [ -n "${"${GH_ERROR_DELAY:-}"}" ] && { sleep "${"${GH_ERROR_DELAY}"}" & echo $! >> "${"${GH_DELAY_PIDS:-/dev/null}"}"; wait; };; esac; [ "${"${GH_POST_FAIL:-0}"}" = 1 ] && exit 1; case "$*" in *"state=pending"*) [ "${"${GH_PENDING_FAIL:-0}"}" = 1 ] && exit 1;; esac; case "$*" in *"${"${GH_FAIL_CONTEXT:-__never__}"}"*) exit 1;; esac; [ -n "${"${GH_APPLY_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_APPLY_LOG}"}"; echo '{}'; exit 0;; esac
       exit 1 ;;
   esac
 fi
@@ -76,7 +76,13 @@ function runCli(repo: Repo, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
 }
 async function installGitShim(
 	repo: Repo,
-	mode: "record-push" | "record-env" | "trace-push" | "slow-push",
+	mode:
+		| "record-push"
+		| "record-env"
+		| "trace-push"
+		| "slow-push"
+		| "block-git"
+		| "count-slug",
 ) {
 	const shim = join(repo.fakeBin, "git");
 	const body =
@@ -98,7 +104,20 @@ if [ "$1" = push ]; then
 fi
 exec ${REAL_GIT} "$@"
 `
-					: `#!/bin/sh
+					: mode === "block-git"
+						? `#!/bin/sh
+case "$*" in *"${"${BLOCK_GIT_ARGS:-__never__}"}"*)
+  echo $$ >> "$BLOCKED_GIT_PID"
+  exec sleep 30;;
+esac
+exec ${REAL_GIT} "$@"
+`
+						: mode === "count-slug"
+							? `#!/bin/sh
+if [ "$1" = config ] && [ "$3" = remote.origin.url ]; then echo slug >> "$SLUG_LOG"; fi
+exec ${REAL_GIT} "$@"
+`
+							: `#!/bin/sh
 printf '%s|%s\n' "$GIT_TERMINAL_PROMPT" "$GIT_ASKPASS" >> "$GIT_ENV_LOG"
 exec ${REAL_GIT} "$@"
 `;
@@ -106,8 +125,8 @@ exec ${REAL_GIT} "$@"
 	await chmod(shim, 0o755);
 	return shim;
 }
-// Reads the pid file the slow-push shim leaves, for exact cleanup.
-const slowPushPgid = async (path: string): Promise<number | undefined> => {
+// Reads the last pid a shim appended to a pid file, for exact cleanup.
+const lastPidIn = async (path: string): Promise<number | undefined> => {
 	const pid = Number(
 		(await readIfPresent(path)).split("\n").filter(Boolean).at(-1),
 	);
@@ -719,11 +738,13 @@ exec ${REAL_GIT} "$@"
 		await mkdir(ready);
 		const postLog = join(dir, "posts.log");
 		const applyLog = join(dir, "applies.log");
+		const delayPids = join(dir, "delayed-pids");
 		const runner = spawnCli(repo, [], {
 			READY: ready,
 			GH_POST_LOG: postLog,
 			GH_APPLY_LOG: applyLog,
 			GH_ERROR_DELAY: "10",
+			GH_DELAY_PIDS: delayPids,
 		});
 		try {
 			await waitUntil(async () => existsSync(join(ready, "only.pid")));
@@ -732,6 +753,9 @@ exec ${REAL_GIT} "$@"
 			await waitUntil(async () =>
 				(await readIfPresent(postLog)).includes("state=error"),
 			);
+			// The blocked fake gh has a delay child by now (the sleep backing the
+			// error post), recorded by pid.
+			await waitUntil(async () => (await lastPidIn(delayPids)) !== undefined);
 			const signaled = Date.now();
 			runner.child.kill("SIGINT");
 			expect(await runner.exited).toBe(130);
@@ -739,12 +763,15 @@ exec ${REAL_GIT} "$@"
 			const posts = await readFile(postLog, "utf8");
 			expect(posts.match(/state=error/g)).toHaveLength(1);
 			// The in-flight gh died with the Runner: no fake gh process survives
-			// the force-exit (its script lives under the run's fakeBin path).
+			// the force-exit (its script lives under the run's fakeBin path)…
 			await sleep(200);
 			const processes = spawnSync("ps", ["-eo", "args"], {
 				encoding: "utf8",
 			});
 			expect(processes.stdout).not.toContain(repo.fakeBin);
+			// …and its delay child is gone too, not just the tracked shell.
+			const delayPid = await lastPidIn(delayPids);
+			if (delayPid !== undefined) expect(deadPid(delayPid)).toBe(true);
 			// …and the killed post never applies after the exit.
 			await sleep(11000);
 			const applies = await readIfPresent(applyLog);
@@ -778,9 +805,7 @@ exec ${REAL_GIT} "$@"
 		});
 		try {
 			// The push is blocked in the shim's sleep 30.
-			await waitUntil(
-				async () => (await slowPushPgid(pushPidFile)) !== undefined,
-			);
+			await waitUntil(async () => (await lastPidIn(pushPidFile)) !== undefined);
 			const signaled = Date.now();
 			runner.child.kill("SIGTERM");
 			expect(await runner.exited).toBe(130);
@@ -789,10 +814,10 @@ exec ${REAL_GIT} "$@"
 			expect(await readIfPresent(postLog)).toBe("");
 			expect(await readIfPresent(applyLog)).toBe("");
 			// The blocked push child died with the Runner, not after it.
-			const pushPid = await slowPushPgid(pushPidFile);
+			const pushPid = await lastPidIn(pushPidFile);
 			if (pushPid !== undefined) expect(deadPid(pushPid)).toBe(true);
 		} finally {
-			const pushPid = await slowPushPgid(pushPidFile);
+			const pushPid = await lastPidIn(pushPidFile);
 			if (pushPid !== undefined) {
 				try {
 					process.kill(pushPid, "SIGKILL");
@@ -855,6 +880,103 @@ exec ${REAL_GIT} "$@"
 			}
 			runner.child.kill("SIGKILL");
 		}
+	});
+
+	test("a blocked repoSlug git child dies before the signal exit", {
+		timeout: 30000,
+	}, async () => {
+		const repo = await makeRepo();
+		await installGitShim(repo, "block-git");
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
+		const pidFile = join(dir, "blocked.pid");
+		const runner = spawnCli(repo, [], {
+			BLOCK_GIT_ARGS: "remote.origin.url",
+			BLOCKED_GIT_PID: pidFile,
+		});
+		try {
+			// The slug lookup inside statuses() blocks after the push.
+			await waitUntil(async () => (await lastPidIn(pidFile)) !== undefined);
+			runner.child.kill("SIGTERM");
+			await sleep(300);
+			runner.child.kill("SIGTERM");
+			expect(await runner.exited).toBe(130);
+			const blocked = await lastPidIn(pidFile);
+			if (blocked !== undefined) expect(deadPid(blocked)).toBe(true);
+		} finally {
+			const blocked = await lastPidIn(pidFile);
+			if (blocked !== undefined) {
+				try {
+					process.kill(blocked, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}
+			runner.child.kill("SIGKILL");
+		}
+	});
+
+	test("a blocked preflight git child dies with the early signal handler", {
+		timeout: 30000,
+	}, async () => {
+		const repo = await makeRepo();
+		await installGitShim(repo, "block-git");
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
+		const pidFile = join(dir, "blocked.pid");
+		const runner = spawnCli(repo, [], {
+			BLOCK_GIT_ARGS: "--porcelain",
+			BLOCKED_GIT_PID: pidFile,
+		});
+		try {
+			// The very first preflight call (git status --porcelain) blocks.
+			await waitUntil(async () => (await lastPidIn(pidFile)) !== undefined);
+			const signaled = Date.now();
+			runner.child.kill("SIGTERM");
+			expect(await runner.exited).toBe(130);
+			expect(Date.now() - signaled).toBeLessThan(2000);
+			const blocked = await lastPidIn(pidFile);
+			if (blocked !== undefined) expect(deadPid(blocked)).toBe(true);
+		} finally {
+			const blocked = await lastPidIn(pidFile);
+			if (blocked !== undefined) {
+				try {
+					process.kill(blocked, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}
+			runner.child.kill("SIGKILL");
+		}
+	});
+
+	test("the stateful signal handler is installed before the early one is removed", async () => {
+		const repo = await makeRepo();
+		const swapLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-sig-")),
+			"swap.log",
+		);
+		const result = runCli(repo, [], { LOCAL_CI_SWAP_LOG: swapLog });
+		expect(result.status).toBe(0);
+		const swap = (await readFile(swapLog, "utf8")).trim().split("\n");
+		expect(swap.indexOf("stateful-installed")).toBeGreaterThanOrEqual(0);
+		expect(swap.indexOf("early-removed")).toBeGreaterThan(
+			swap.indexOf("stateful-installed"),
+		);
+	});
+
+	test("the repository slug is resolved once per Run, not once per post", async () => {
+		const repo = await makeRepo('checks:\n  a: "echo a"\n  b: "echo b"\n');
+		await installGitShim(repo, "count-slug");
+		const slugLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-sig-")),
+			"slug.log",
+		);
+		const result = runCli(repo, [], { SLUG_LOG: slugLog });
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("posted 2 Commit Statuses");
+		// One lookup serves the statuses read and all pending/result posts.
+		expect(
+			(await readIfPresent(slugLog)).split("\n").filter(Boolean),
+		).toHaveLength(1);
 	});
 
 	test("runs --no-push against a commit already on the remote without pushing", async () => {
