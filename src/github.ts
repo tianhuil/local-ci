@@ -1,4 +1,5 @@
 import type { Result } from "./checks.js";
+import type { Check } from "./config.js";
 import { repoSlug } from "./git.js";
 import { command } from "./proc.js";
 
@@ -16,18 +17,73 @@ function isSuccessStatus(value: unknown): value is CommitStatus {
 	);
 }
 
+// Latest state per local-ci/* context, as GitHub reports on the combined
+// status endpoint. The top-level state is ignored: GitHub computes it over
+// every tool's contexts, not just local-ci's.
 export async function statuses(sha: string): Promise<Set<string>> {
 	try {
 		const response = await command([
 			"gh",
 			"api",
-			`repos/${await repoSlug()}/statuses/${sha}`,
+			`repos/${await repoSlug()}/commits/${sha}/status?per_page=100`,
 		]);
-		const list: unknown = JSON.parse(response.stdout);
-		if (!Array.isArray(list)) return new Set();
-		return new Set(list.filter(isSuccessStatus).map((item) => item.context));
+		const combined: unknown = JSON.parse(response.stdout);
+		if (!isRecord(combined) || !Array.isArray(combined.statuses))
+			return new Set();
+		return new Set(
+			combined.statuses
+				.filter(isSuccessStatus)
+				.map((status) => status.context)
+				.filter((context) => context.startsWith("local-ci/")),
+		);
 	} catch {
 		return new Set();
+	}
+}
+
+export async function postPending(checks: Check[], sha: string): Promise<void> {
+	for (const check of checks) {
+		const context = `local-ci/${check.name}`;
+		try {
+			await command([
+				"gh",
+				"api",
+				`repos/${await repoSlug()}/statuses/${sha}`,
+				"-f",
+				"state=pending",
+				"-f",
+				`context=${context}`,
+				"-f",
+				"description=running…",
+			]);
+		} catch {
+			console.error(
+				`error: failed to post Commit Status ${context} to GitHub; run gh auth login, then local-ci`,
+			);
+		}
+	}
+}
+
+export async function postInterrupted(
+	checks: Check[],
+	sha: string,
+): Promise<void> {
+	for (const check of checks) {
+		try {
+			await command([
+				"gh",
+				"api",
+				`repos/${await repoSlug()}/statuses/${sha}`,
+				"-f",
+				"state=error",
+				"-f",
+				`context=local-ci/${check.name}`,
+				"-f",
+				"description=interrupted",
+			]);
+		} catch {
+			/* best effort: the Run is already exiting 130 */
+		}
 	}
 }
 

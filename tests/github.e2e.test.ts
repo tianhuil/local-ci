@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -35,7 +35,9 @@ function branchName(): string {
 const slug = repoSlug();
 const pushed: { dir: string; branch: string }[] = [];
 
-async function makeRepo(): Promise<{ dir: string; branch: string }> {
+async function makeRepo(
+	slowTimeout = TIMEOUT,
+): Promise<{ dir: string; branch: string }> {
 	const dir = await mkdtemp(join(tmpdir(), "local-ci-e2e-"));
 	const branch = branchName();
 	run("git", ["init", "-q", "-b", branch], dir);
@@ -59,7 +61,7 @@ async function makeRepo(): Promise<{ dir: string; branch: string }> {
 	);
 	await writeFile(
 		join(dir, "local-ci.yml"),
-		`checks:\n  pass: "true"\n  fail: "false"\n  slow:\n    command: sleep 30\n    timeout: ${TIMEOUT}\n`,
+		`checks:\n  pass: "true"\n  fail: "false"\n  slow:\n    command: sleep 30\n    timeout: ${slowTimeout}\n`,
 	);
 	await writeFile(join(dir, "id.txt"), `${branch}\n`);
 	run("git", ["add", "."], dir);
@@ -73,6 +75,28 @@ function localCi(dir: string, args: string[] = []) {
 		encoding: "utf8",
 		timeout: 60000,
 	});
+}
+// Spawns the Runner asynchronously so a test can poll GitHub while it runs.
+function localCiAsync(dir: string) {
+	const child = spawn(process.execPath, [BIN], {
+		cwd: dir,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let output = "";
+	child.stdout?.on("data", (data) => {
+		output += data;
+	});
+	child.stderr?.on("data", (data) => {
+		output += data;
+	});
+	const exited = new Promise<{ status: number | null; output: string }>(
+		(resolve) => {
+			child.on("close", (status) => resolve({ status, output }));
+		},
+	);
+	const guard = setTimeout(() => child.kill("SIGKILL"), 90000);
+	child.on("close", () => clearTimeout(guard));
+	return { exited };
 }
 // Latest status per context, as GitHub shows on the commit.
 function latestStatuses(sha: string): Record<string, string> {
@@ -140,6 +164,49 @@ afterAll(() => {
 });
 
 describe.skipIf(process.env.LOCAL_CI_E2E !== "1")("local-ci on GitHub", () => {
+	test("MC-05: shows a pending local-ci Commit Status on GitHub while a slow Check still runs", {
+		timeout: 180000,
+	}, async () => {
+		const { dir, branch } = await makeRepo(8);
+		const sha = run("git", ["rev-parse", "HEAD"], dir);
+		const short = sha.slice(0, 7);
+		const runner = localCiAsync(dir);
+		// Poll the combined status endpoint while the slow Check (timeout 8s)
+		// still runs; some local-ci/* context must read pending at least once.
+		let pendingSeen = false;
+		const deadline = Date.now() + 30000;
+		while (!pendingSeen && Date.now() < deadline) {
+			pendingSeen = Object.entries(latestStatuses(sha)).some(
+				([context, value]) =>
+					context.startsWith("local-ci/") && value.startsWith("pending"),
+			);
+			if (!pendingSeen) await sleep(300);
+		}
+		expect(pendingSeen).toBe(true);
+		const result = await runner.exited;
+		if (result.status !== 1) throw new Error(`run: ${result.output}`);
+		expect(result.output).toContain(`pushed ${branch} to origin (${short})`);
+		expect(result.output).toContain(
+			`posted 3 Commit Statuses to ${short}; 2 of 3 Checks failed`,
+		);
+		const contexts = [
+			"local-ci/fail",
+			"local-ci/pass",
+			"local-ci/slow",
+		] as const;
+		const statuses = await eventually(
+			() => latestStatuses(sha),
+			(s) => contexts.every((context) => context in s),
+		);
+		expect(statuses["local-ci/pass"]).toMatch(/^success: passed in \d+s$/);
+		expect(statuses["local-ci/fail"]).toMatch(
+			/^failure: failed in \d+s \(exit 1\)$/,
+		);
+		expect(statuses["local-ci/slow"]).toMatch(
+			/^failure: failed in \d+s \(timeout\)$/,
+		);
+	});
+
 	test("pushes the branch, posts real Commit Statuses, skips passed Checks, and --force reposts", {
 		timeout: 180000,
 	}, async () => {

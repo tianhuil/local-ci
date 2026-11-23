@@ -1,6 +1,6 @@
 # `local-ci` Usage
 
-The Author commits and runs `local-ci` with no arguments. The Runner checks for a Clean Tree, pushes the current branch, runs every Check in `local-ci.yml`, and posts one Commit Status per Check to GitHub. It exits 0 only if every Check passed.
+The Author commits and runs `local-ci` with no arguments. The Runner checks for a Clean Tree, pushes the current branch, runs every Check in `local-ci.yml`, and posts one Commit Status per Check to GitHub. While Checks run, each one shows as `pending` (`running…`) on GitHub; the result replaces it when the Check finishes. It exits 0 only if every Check passed.
 
 ```console
 $ git commit -m "Add login form"
@@ -12,7 +12,7 @@ $ local-ci
 ## Install
 
 ```console
-$ pnpm add --global github:tianhuil/local-ci#v0.1.0
+$ pnpm add --global github:tianhuil/local-ci#v0.1.1
 $ pnpm add --global github:tianhuil/local-ci#release
 ```
 
@@ -53,7 +53,7 @@ The Runner never prompts. If `git push` would ask for credentials, it fails at o
 
 ## Run all Checks
 
-The Runner pushes first, then runs every Check in parallel — all of them at once by default, or up to `--jobs N` at a time — even after one fails, then posts every result. Check lines print in `local-ci.yml` order once every Check has finished, so stdout stays stable while Checks interleave; live progress (`running lint…`) goes to stderr. The samples below show stdout and stderr together, as a terminal does.
+The Runner pushes first, then posts a `pending` Commit Status (`running…`) for every Check about to run — so the PR shows the Run in progress — then runs every Check in parallel — all of them at once by default, or up to `--jobs N` at a time — even after one fails, then posts every result. Check lines print in `local-ci.yml` order once every Check has finished, so stdout stays stable while Checks interleave; live progress (`running lint…`) goes to stderr. The samples below show stdout and stderr together, as a terminal does.
 
 ```console
 $ local-ci
@@ -106,7 +106,7 @@ posted 4 Commit Statuses to 8d41e07; all 4 Checks passed
 
 ## Re-run on the same commit
 
-Running twice is safe. There is nothing new to push, and Checks that already passed on this SHA are skipped.
+Running twice is safe. There is nothing new to push, and Checks that already passed on this SHA are skipped. A Check counts as already passed only when the latest `local-ci/<check>` status on that commit is `success`: a Check that passed and later failed (for example under `--force`) runs again. Statuses posted by other tools never affect skipping.
 
 ```console
 $ local-ci
@@ -128,6 +128,12 @@ feature/login already up to date on origin (8d41e07)
 ```
 
 `--force` runs every Check anyway, for example to rule out a flaky pass.
+
+---
+
+## Interrupting a Run
+
+Ctrl-C (SIGINT) or SIGTERM kills the running Checks and posts an `error` Commit Status with description `interrupted` for every Check that has no final result, then exits 130. A signal while results are posting lets the in-flight posts finish — those results stand — and exits 130 without extra error posts.
 
 ---
 
@@ -156,11 +162,12 @@ No PR is needed. Commit Statuses attach to the commit and appear once a PR is op
 
 ## Exit codes
 
-| Code | Meaning                                                            |
-| ---- | ------------------------------------------------------------------ |
-| `0`  | Every Check passed, or was skipped as already passed.              |
-| `1`  | A Check failed, or the Run could not start. The output says which. |
-| `2`  | Unknown option or extra argument. Nothing ran.                     |
+| Code  | Meaning                                                                       |
+| ----- | ----------------------------------------------------------------------------- |
+| `0`   | Every Check passed, or was skipped as already passed.                         |
+| `1`   | A Check failed, or the Run could not start. The output says which.            |
+| `2`   | Unknown option or extra argument. Nothing ran.                                |
+| `130` | Interrupted (SIGINT/SIGTERM); unfinished Checks posted `error`/`interrupted`. |
 
 ---
 
@@ -172,6 +179,7 @@ Usage: local-ci [options]
 
 Push the current branch, run every Check in local-ci.yml, and post one
 Commit Status (local-ci/<check>) per Check to the pushed commit on GitHub.
+Each Check posts pending ("running…") while it runs, then its final state.
 Prints one line per Check; full logs go to .git/local-ci/logs/<sha>/.
 
 Options:
@@ -189,9 +197,11 @@ Examples:
   local-ci --jobs 1        run Checks one at a time, e.g. if they conflict
 
 Exit codes:
-  0  every Check passed or had already passed
-  1  a Check failed, or the Run could not start (see the error line)
-  2  unknown option or argument
+  0    every Check passed or had already passed
+  1    a Check failed, or the Run could not start (see the error line)
+  2    unknown option or argument
+  130  interrupted (Ctrl-C or SIGTERM): running Checks are killed and the
+       unfinished ones post error/interrupted
 ```
 
 `local-ci --version` prints only the version.

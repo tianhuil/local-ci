@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -29,11 +29,13 @@ if [ "$1" = auth ] && [ "$2" = token ]; then
   exit 0
 fi
 if [ "$1" = api ]; then
+  case "$*" in *" -f "*) ;; *) [ -n "${"${GH_API_LOG:-}"}" ] && printf '%s\n' "$2" >> "${"${GH_API_LOG}"}";; esac
   case "$2" in
+    */commits/*/status*) echo '{"state":"'"${"${GH_COMBINED_STATE:-failure}"}"'","statuses":'"${"${GH_STATUSES:-[]}"}"'}'; exit 0 ;;
     */commits/*) [ "${"${GH_COMMIT_MISSING:-0}"}" = 1 ] && exit 1; echo '{}'; exit 0 ;;
     */statuses/*)
-      case "$*" in *" -f "*) [ -n "${"${GH_POST_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_POST_LOG}"}"; [ "${"${GH_POST_FAIL:-0}"}" = 1 ] && exit 1; case "$*" in *"${"${GH_FAIL_CONTEXT:-__never__}"}"*) exit 1;; esac; echo '{}'; exit 0;; esac
-      echo "${"${GH_STATUSES:-[]}"}"; exit 0 ;;
+      case "$*" in *" -f "*) [ -n "${"${GH_POST_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_POST_LOG}"}"; [ -n "${"${GH_POST_DELAY:-}"}" ] && sleep "${"${GH_POST_DELAY}"}"; [ "${"${GH_POST_FAIL:-0}"}" = 1 ] && exit 1; case "$*" in *"${"${GH_FAIL_CONTEXT:-__never__}"}"*) exit 1;; esac; echo '{}'; exit 0;; esac
+      exit 1 ;;
   esac
 fi
 exit 1
@@ -72,7 +74,10 @@ function runCli(repo: Repo, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
 		timeout: 15000,
 	});
 }
-async function installGitShim(repo: Repo, mode: "record-push" | "record-env") {
+async function installGitShim(
+	repo: Repo,
+	mode: "record-push" | "record-env" | "trace-push",
+) {
 	const shim = join(repo.fakeBin, "git");
 	const body =
 		mode === "record-push"
@@ -80,7 +85,12 @@ async function installGitShim(repo: Repo, mode: "record-push" | "record-env") {
 [ "$1" = push ] && { echo push >> "$NO_PUSH_LOG"; exit 99; }
 exec ${REAL_GIT} "$@"
 `
-			: `#!/bin/sh
+			: mode === "trace-push"
+				? `#!/bin/sh
+[ "$1" = push ] && echo PUSH >> "$TRACE"
+exec ${REAL_GIT} "$@"
+`
+				: `#!/bin/sh
 printf '%s|%s\n' "$GIT_TERMINAL_PROMPT" "$GIT_ASKPASS" >> "$GIT_ENV_LOG"
 exec ${REAL_GIT} "$@"
 `;
@@ -91,9 +101,46 @@ exec ${REAL_GIT} "$@"
 function allOutput(result: ReturnType<typeof runCli>) {
 	return `${result.stdout}${result.stderr}`;
 }
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitUntil(check: () => Promise<boolean>, ms = 10000) {
+	const deadline = Date.now() + ms;
+	while (Date.now() < deadline) {
+		if (await check()) return;
+		await sleep(100);
+	}
+	throw new Error("condition not met before timeout");
+}
+const readIfPresent = (path: string) => readFile(path, "utf8").catch(() => "");
+// Spawns the Runner asynchronously so a test can signal it mid-Run.
+function spawnCli(
+	repo: Repo,
+	args: string[] = [],
+	env: NodeJS.ProcessEnv = {},
+) {
+	const child = spawn(process.execPath, [BIN, ...args], {
+		cwd: repo.dir,
+		env: {
+			...process.env,
+			PATH: `${repo.fakeBin}:${process.env.PATH}`,
+			...env,
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let output = "";
+	child.stdout?.on("data", (data) => {
+		output += data;
+	});
+	child.stderr?.on("data", (data) => {
+		output += data;
+	});
+	const exited = new Promise<number | null>((resolve) => {
+		child.on("close", (code) => resolve(code));
+	});
+	return { child, exited, output: () => output };
+}
 
 describe("local-ci CLI contract", () => {
-	test("matches the help block byte-for-byte and prints version", async () => {
+	test("MC-21: --help matches usage.md byte for byte and prints the version", async () => {
 		const docs = await readFile("docs/context/usage.md", "utf8");
 		const expected = docs.match(/\$ local-ci --help\n([\s\S]*?)```/)?.[1];
 		expect(expected).toBeDefined();
@@ -106,11 +153,11 @@ describe("local-ci CLI contract", () => {
 			encoding: "utf8",
 		});
 		expect(version.status).toBe(0);
-		expect(version.stdout).toBe("0.1.0\n");
+		expect(version.stdout).toBe("0.1.1\n");
 		const shortVersion = spawnSync(process.execPath, [BIN, "-V"], {
 			encoding: "utf8",
 		});
-		expect(shortVersion.stdout).toBe("0.1.0\n");
+		expect(shortVersion.stdout).toBe("0.1.1\n");
 		const shortHelp = spawnSync(process.execPath, [BIN, "-h"], {
 			encoding: "utf8",
 		});
@@ -342,6 +389,160 @@ exec ${REAL_GIT} "$@"
 		});
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("posted 2 Commit Statuses");
+	});
+
+	test("MC-03: reruns a Check whose latest local-ci/* state is failure after an older success", async () => {
+		const repo = await makeRepo('checks:\n  unit: "echo ran"\n');
+		const logs = await mkdtemp(join(tmpdir(), "local-ci-mc03-"));
+		const apiLog = join(logs, "api.log");
+		const postLog = join(logs, "posts.log");
+		const result = runCli(repo, [], {
+			GH_STATUSES: '[{"state":"failure","context":"local-ci/unit"}]',
+			GH_API_LOG: apiLog,
+			GH_POST_LOG: postLog,
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("unit  passed");
+		expect(result.stdout).not.toContain("skipped");
+		expect(result.stdout).not.toContain("already passed");
+		const posts = await readFile(postLog, "utf8");
+		expect(posts).toContain(
+			"-f state=success -f context=local-ci/unit -f description=passed in 1s",
+		);
+		// The skip decision must read the combined endpoint, which reports only
+		// the latest state per context, never the full history endpoint.
+		const api = await readFile(apiLog, "utf8");
+		expect(api).toContain(`commits/${repo.sha}/status?per_page=100`);
+		expect(api).not.toContain("/statuses/");
+	});
+
+	test("MC-04: ignores other tools' contexts and the combined top-level state when skipping", async () => {
+		const repo = await makeRepo('checks:\n  unit: "echo ran"\n');
+		const apiLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-mc04-")),
+			"api.log",
+		);
+		const result = runCli(repo, [], {
+			GH_COMBINED_STATE: "success",
+			GH_STATUSES:
+				'[{"state":"success","context":"ci/github-actions"},{"state":"success","context":"continuous-integration/travis"},{"state":"pending","context":"local-ci/unit"}]',
+			GH_API_LOG: apiLog,
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("unit  passed");
+		expect(result.stdout).not.toContain("already passed");
+		const api = await readFile(apiLog, "utf8");
+		expect(api).toContain(`commits/${repo.sha}/status?per_page=100`);
+		expect(api).not.toContain("/statuses/");
+	});
+
+	test("MC-01: posts a pending Commit Status for every Check about to run, after push, before execution", async () => {
+		const config =
+			'checks:\n  one: "echo ran-one >> $TRACE"\n  two: "echo ran-two >> $TRACE"\n  done: "echo ran-done >> $TRACE"\n';
+		const repo = await makeRepo(config);
+		await installGitShim(repo, "trace-push");
+		const trace = join(
+			await mkdtemp(join(tmpdir(), "local-ci-mc01-")),
+			"trace.log",
+		);
+		// One interleaved log: git push, every Commit Status post, and each
+		// Check's first output, so ordering is provable.
+		const result = runCli(repo, [], {
+			TRACE: trace,
+			GH_POST_LOG: trace,
+			GH_STATUSES: '[{"state":"success","context":"local-ci/done"}]',
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("done  skipped  already passed");
+		const traceText = await readFile(trace, "utf8");
+		expect(traceText).toContain(
+			"-f state=pending -f context=local-ci/one -f description=running…",
+		);
+		expect(traceText).toContain(
+			"-f state=pending -f context=local-ci/two -f description=running…",
+		);
+		// No pending for the Check that is not about to run.
+		expect(traceText).not.toContain("local-ci/done");
+		expect(traceText).not.toContain("ran-done");
+		// The push precedes the pending posts, and every pending post precedes
+		// its Check's execution.
+		expect(traceText.indexOf("PUSH")).toBeLessThan(
+			traceText.indexOf("state=pending"),
+		);
+		expect(traceText.indexOf("state=pending")).toBeLessThan(
+			traceText.indexOf("ran-one"),
+		);
+		expect(traceText.indexOf("state=pending")).toBeLessThan(
+			traceText.indexOf("ran-two"),
+		);
+		expect(traceText).toContain(
+			"-f state=success -f context=local-ci/one -f description=passed in 1s",
+		);
+	});
+
+	test("MC-02: SIGTERM kills running Checks, posts error/interrupted for unfinished ones, and exits 130", {
+		timeout: 30000,
+	}, async () => {
+		const config =
+			'checks:\n  slow: "touch $READY/slow && sleep 9871"\n  slower: "touch $READY/slower && sleep 9872"\n';
+		const repo = await makeRepo(config);
+		const ready = join(
+			await mkdtemp(join(tmpdir(), "local-ci-mc02-")),
+			"ready",
+		);
+		await mkdir(ready);
+		const postLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-mc02-")),
+			"posts.log",
+		);
+		const runner = spawnCli(repo, [], { READY: ready, GH_POST_LOG: postLog });
+		// Both Checks are executing (their marker files exist) before signaling.
+		await waitUntil(
+			async () =>
+				existsSync(join(ready, "slow")) && existsSync(join(ready, "slower")),
+		);
+		runner.child.kill("SIGTERM");
+		expect(await runner.exited).toBe(130);
+		const posts = await readFile(postLog, "utf8");
+		expect(posts).toContain(
+			"-f state=error -f context=local-ci/slow -f description=interrupted",
+		);
+		expect(posts).toContain(
+			"-f state=error -f context=local-ci/slower -f description=interrupted",
+		);
+		expect(posts).not.toContain("state=success");
+		expect(posts).not.toContain("state=failure");
+		// The running Checks were killed, not left behind as orphans.
+		await sleep(200);
+		const processes = spawnSync("ps", ["-eo", "args"], { encoding: "utf8" });
+		expect(processes.stdout).not.toMatch(/sleep 987[12]/);
+		spawnSync("pkill", ["-f", "sleep 987"]); // stop anything this test started
+	});
+
+	test("MC-42: a signal while results are posting lets the in-flight posts finish and exits 130 without error posts", {
+		timeout: 30000,
+	}, async () => {
+		const repo = await makeRepo('checks:\n  a: "echo a"\n  b: "echo b"\n');
+		const postLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-mc42-")),
+			"posts.log",
+		);
+		// Every post takes 2s, so the first result post is still in flight
+		// when its request appears in the log.
+		const runner = spawnCli(repo, [], {
+			GH_POST_LOG: postLog,
+			GH_POST_DELAY: "2",
+		});
+		await waitUntil(async () =>
+			(await readIfPresent(postLog)).includes("state=success"),
+		);
+		runner.child.kill("SIGTERM");
+		expect(await runner.exited).toBe(130);
+		const posts = await readFile(postLog, "utf8");
+		expect(posts.match(/state=success/g)).toHaveLength(2);
+		expect(posts).toContain("-f context=local-ci/a");
+		expect(posts).toContain("-f context=local-ci/b");
+		expect(posts).not.toContain("state=error");
 	});
 
 	test("runs --no-push against a commit already on the remote without pushing", async () => {

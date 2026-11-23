@@ -2,11 +2,16 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import pMap from "p-map";
-import { type Result, runCheck } from "./checks.js";
+import { killRunningChecks, type Result, runCheck } from "./checks.js";
 import { type Options, parseArgs } from "./cli.js";
-import { loadChecks } from "./config.js";
+import { type Check, loadChecks } from "./config.js";
 import { push, repoSlug, resolveGitDir } from "./git.js";
-import { postResults, statuses } from "./github.js";
+import {
+	postInterrupted,
+	postPending,
+	postResults,
+	statuses,
+} from "./github.js";
 import { command, errorMessage, git } from "./proc.js";
 import { printCheckResults, printFailurePreviews } from "./report.js";
 
@@ -53,11 +58,52 @@ async function preflight(options: Options) {
 	return { ...config, branch, sha };
 }
 
+// Signal contract: while Checks run, SIGINT/SIGTERM kills them and posts
+// error/interrupted for every Check without a final result, then exits 130;
+// while results post, the in-flight posts finish (they are final) and the Run
+// exits 130 without extra error posts. Handlers stay installed until exit.
+type RunState = {
+	phase: "running" | "posting" | "done";
+	interrupted: boolean;
+	toRun: Check[];
+	finished: Set<string>;
+	sha: string;
+};
+
+function installSignalHandlers(state: RunState) {
+	const onSignal = () => {
+		if (state.interrupted) return;
+		state.interrupted = true;
+		if (state.phase === "running") {
+			killRunningChecks();
+			const unfinished = state.toRun.filter(
+				(check) => !state.finished.has(check.name),
+			);
+			void postInterrupted(unfinished, state.sha)
+				.catch(() => {})
+				.finally(() => process.exit(130));
+			return;
+		}
+		if (state.phase === "posting") return; // main() exits 130 after posting
+		process.exit(130);
+	};
+	process.on("SIGINT", onSignal);
+	process.on("SIGTERM", onSignal);
+}
+
 export async function main() {
 	try {
 		const options = parseArgs(process.argv.slice(2));
 		const info = await preflight(options);
 		await push(info.branch, options.noPush, info.sha);
+		const state: RunState = {
+			phase: "running",
+			interrupted: false,
+			toRun: [],
+			finished: new Set(),
+			sha: info.sha,
+		};
+		installSignalHandlers(state);
 		const passed = await statuses(info.sha);
 		const skipped: Result[] = info.checks
 			.filter((check) => passed.has(`local-ci/${check.name}`) && !options.force)
@@ -65,12 +111,22 @@ export async function main() {
 		const pending = info.checks.filter(
 			(check) => !passed.has(`local-ci/${check.name}`) || options.force,
 		);
+		state.toRun = pending;
 		const gitDir = await resolveGitDir();
 		const logDir = join(gitDir, "local-ci", "logs", info.sha.slice(0, 7));
 		await mkdir(logDir, { recursive: true });
-		const ran = await pMap(pending, (check) => runCheck(check, process.cwd()), {
-			concurrency: options.jobs ?? Number.POSITIVE_INFINITY,
-		});
+		await postPending(pending, info.sha);
+		const ran = await pMap(
+			pending,
+			async (check) => {
+				const result = await runCheck(check, process.cwd());
+				state.finished.add(check.name);
+				return result;
+			},
+			{ concurrency: options.jobs ?? Number.POSITIVE_INFINITY },
+		);
+		if (state.interrupted) return; // the signal handler posts and exits 130
+		state.phase = "posting";
 		for (const result of ran)
 			await writeFile(
 				join(logDir, `${result.check.name}.log`),
@@ -83,12 +139,16 @@ export async function main() {
 			console.log(
 				`0 Checks run; all ${info.checks.length} already passed on ${info.sha.slice(0, 7)}`,
 			);
+			state.phase = "done";
+			if (state.interrupted) process.exit(130);
 			return;
 		}
 		const width = Math.max(...info.checks.map((check) => check.name.length));
 		printCheckResults(all, width);
 		printFailurePreviews(ran, info.sha);
 		const posting = await postResults(ran, info.sha, info.checks.length);
+		state.phase = "done";
+		if (state.interrupted) process.exit(130);
 		if (
 			ran.some((result) => result.status === "failed") ||
 			posting.failures > 0

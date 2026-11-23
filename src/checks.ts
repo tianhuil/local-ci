@@ -12,6 +12,20 @@ export type Result = {
 	log?: string;
 };
 
+// PIDs of the detached process groups currently running a Check, so a
+// SIGINT/SIGTERM handler can kill them before posting interrupted statuses.
+const running = new Set<number>();
+
+export function killRunningChecks(): void {
+	for (const pid of running) {
+		try {
+			process.kill(-pid, "SIGTERM");
+		} catch {
+			/* already exited */
+		}
+	}
+}
+
 export function runCheck(check: Check, root: string): Promise<Result> {
 	return new Promise((resolve) => {
 		const start = Date.now();
@@ -22,6 +36,7 @@ export function runCheck(check: Check, root: string): Promise<Result> {
 			env: safeEnv,
 			detached: true,
 		});
+		if (child.pid) running.add(child.pid);
 		let output = "";
 		let settled = false;
 		let timedOut = false;
@@ -60,6 +75,7 @@ export function runCheck(check: Check, root: string): Promise<Result> {
 			}, 100);
 		}, check.timeout * 1000);
 		child.on("close", (code) => {
+			if (child.pid) running.delete(child.pid);
 			clearTimeout(timer);
 			finish(timedOut, code ?? 1);
 		});

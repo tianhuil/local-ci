@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import {
 	chmod,
 	mkdtemp,
@@ -10,6 +11,15 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+
+// Baseline tag and next version derive from package.json, so a version bump
+// never breaks these tests.
+const CURRENT_VERSION = (
+	JSON.parse(readFileSync("package.json", "utf8")) as { version: string }
+).version;
+const CURRENT_TAG = `v${CURRENT_VERSION}`;
+const [MAJOR, MINOR, PATCH] = CURRENT_VERSION.split(".").map(Number);
+const NEXT_VERSION = `${MAJOR}.${MINOR}.${PATCH + 1}`;
 
 const git = (args: string[], cwd: string) =>
 	execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -77,11 +87,13 @@ describe("release flow", () => {
 			repo.root,
 		).split(/\s/)[0];
 		const tag = git(
-			["ls-remote", "--tags", "origin", "refs/tags/v0.1.0^{}"],
+			["ls-remote", "--tags", "origin", `refs/tags/${CURRENT_TAG}^{}`],
 			repo.root,
 		).split(/\s/)[0];
 		expect(release).toBe(tag);
-		expect(git(["cat-file", "-t", "refs/tags/v0.1.0"], repo.root)).toBe("tag");
+		expect(git(["cat-file", "-t", `refs/tags/${CURRENT_TAG}`], repo.root)).toBe(
+			"tag",
+		);
 		expect(release).not.toBe("");
 		const tree = git(["show", "-s", "--format=%T", release], repo.root);
 		expect(
@@ -106,20 +118,20 @@ describe("release flow", () => {
 		);
 		expect(second.status).toBe(0);
 		expect(second.stderr).toContain(
-			"v0.1.0 already exists on origin; nothing to release.",
+			`${CURRENT_TAG} already exists on origin; nothing to release.`,
 		);
 		const previousRelease = release;
 		const packagePath = join(repo.root, "package.json");
 		const packageJson = JSON.parse(await readFile(packagePath, "utf8")) as {
 			version: string;
 		};
-		packageJson.version = "0.1.1";
+		packageJson.version = NEXT_VERSION;
 		await writeFile(
 			packagePath,
 			`${JSON.stringify(packageJson, null, "\t")}\n`,
 		);
 		git(["add", "package.json"], repo.root);
-		git(["commit", "-qm", "source 0.1.1"], repo.root);
+		git(["commit", "-qm", `source ${NEXT_VERSION}`], repo.root);
 		const newSourceHead = git(["rev-parse", "HEAD"], repo.root);
 		git(["push", "-q", "origin", "main"], repo.root);
 		const third = spawnSync(
@@ -147,7 +159,7 @@ describe("release flow", () => {
 			"clone",
 			"-q",
 			"--branch",
-			"v0.1.1",
+			`v${NEXT_VERSION}`,
 			repo.remote,
 			bumpedCheckout,
 		]);
@@ -160,7 +172,7 @@ describe("release flow", () => {
 			{ cwd: bumpedCheckout, encoding: "utf8" },
 		);
 		expect(bumpedInstalled.status).toBe(0);
-		expect(bumpedInstalled.stdout).toBe("0.1.1\n");
+		expect(bumpedInstalled.stdout).toBe(`${NEXT_VERSION}\n`);
 
 		const checkout = await mkdtemp(
 			join(tmpdir(), "local-ci-release-checkout-"),
@@ -169,7 +181,7 @@ describe("release flow", () => {
 			"clone",
 			"-q",
 			"--branch",
-			"v0.1.0",
+			CURRENT_TAG,
 			repo.remote,
 			checkout,
 		]);
@@ -184,7 +196,7 @@ describe("release flow", () => {
 		if (installed.status !== 0)
 			throw new Error(`tag install failed: ${installed.stderr}`);
 		expect(installed.status).toBe(0);
-		expect(installed.stdout).toBe("0.1.0\n");
+		expect(installed.stdout).toBe(`${CURRENT_VERSION}\n`);
 		const archive = await mkdtemp(join(tmpdir(), "local-ci-release-archive-"));
 		execFileSync(
 			"sh",
@@ -200,7 +212,7 @@ describe("release flow", () => {
 			{ cwd: archive, encoding: "utf8" },
 		);
 		expect(archived.status).toBe(0);
-		expect(archived.stdout).toBe("0.1.0\n");
+		expect(archived.stdout).toBe(`${CURRENT_VERSION}\n`);
 	});
 
 	test("workflow verify command works from a fresh checkout", {
@@ -226,13 +238,13 @@ describe("release flow", () => {
 		const packageJson = JSON.parse(await readFile(packagePath, "utf8")) as {
 			version: string;
 		};
-		packageJson.version = "0.1.1";
+		packageJson.version = NEXT_VERSION;
 		await writeFile(
 			packagePath,
 			`${JSON.stringify(packageJson, null, "\t")}\n`,
 		);
 		git(["add", "package.json"], repo.root);
-		git(["commit", "-qm", "version 0.1.1"], repo.root);
+		git(["commit", "-qm", `version ${NEXT_VERSION}`], repo.root);
 		git(["push", "-q", "origin", "main"], repo.root);
 		const mainHead = git(["rev-parse", "HEAD"], repo.root);
 		const refsBefore = git(["ls-remote", "origin"], repo.root);
@@ -360,7 +372,7 @@ describe("release flow", () => {
 		);
 		expect(result.status).not.toBe(0);
 		expect(`${result.stdout}${result.stderr}`).toContain(
-			"Failed to atomically publish v0.1.0 and release",
+			`Failed to atomically publish ${CURRENT_TAG} and release`,
 		);
 		expect(git(["ls-remote", "origin"], repo.root)).toBe(refsBefore);
 		expect(
@@ -374,7 +386,7 @@ describe("release flow", () => {
 		);
 		expect(retry.status).toBe(0);
 		expect(
-			git(["ls-remote", "origin", "refs/tags/v0.1.0^{}"], repo.root),
+			git(["ls-remote", "origin", `refs/tags/${CURRENT_TAG}^{}`], repo.root),
 		).not.toBe("");
 	});
 
@@ -408,7 +420,7 @@ exit 2
 		});
 		expect(result.status).not.toBe(0);
 		expect(`${result.stdout}${result.stderr}`).toContain(
-			"GitHub Release v0.1.0 was not created; run gh release create v0.1.0",
+			`GitHub Release ${CURRENT_TAG} was not created; run gh release create ${CURRENT_TAG}`,
 		);
 		const retry = spawnSync("node", ["scripts/release.mts", "publish"], {
 			cwd: repo.root,
@@ -433,9 +445,15 @@ exit 2
 			],
 			repo.root,
 		);
-		git(["tag", "-a", "v0.1.0", "-m", "diverged", other], repo.root);
+		git(["tag", "-a", CURRENT_TAG, "-m", "diverged", other], repo.root);
 		git(
-			["push", "-q", "origin", "refs/heads/release", "refs/tags/v0.1.0"],
+			[
+				"push",
+				"-q",
+				"origin",
+				"refs/heads/release",
+				`refs/tags/${CURRENT_TAG}`,
+			],
 			repo.root,
 		);
 		const result = spawnSync(
@@ -500,7 +518,7 @@ exit 2
 			{ encoding: "utf8" },
 		);
 		expect(installed.status).toBe(0);
-		expect(installed.stdout).toBe("0.1.0\n");
+		expect(installed.stdout).toBe(`${CURRENT_VERSION}\n`);
 	});
 
 	test("fails when package files omit built output", {
