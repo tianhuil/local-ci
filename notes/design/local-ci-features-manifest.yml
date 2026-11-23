@@ -1,0 +1,174 @@
+# Design-owned denominator of required cases. tests/manifest.test.ts fails
+# unless every id whose phase is listed in enforced_phases appears in the
+# named file's source (test title). Each PR appends its phase; removing one
+# weakens the gate. Add rows freely; never remove, rename, or renumber one.
+enforced_phases: [P1]
+cases:
+  - id: MC-01
+    phase: P1
+    file: tests/cli.test.ts
+    behavior: pending Commit Status posted for every Check about to run, after push, before execution
+  - id: MC-02
+    phase: P1
+    file: tests/cli.test.ts
+    behavior: SIGINT or SIGTERM kills running Checks, posts error/interrupted for unfinished ones, exits 130
+  - id: MC-03
+    phase: P1
+    file: tests/cli.test.ts
+    behavior: a Check whose latest local-ci/* state is failure after an older success is rerun
+  - id: MC-04
+    phase: P1
+    file: tests/cli.test.ts
+    behavior: statuses from other tools' contexts and the combined state field are ignored
+  - id: MC-05
+    phase: P1
+    file: tests/github.e2e.test.ts
+    behavior: e2e observes a real pending Commit Status on GitHub
+  - id: MC-06
+    phase: P2
+    file: tests/cli.test.ts
+    behavior: --only runs and posts only the named Checks plus their dependencies
+  - id: MC-07
+    phase: P2
+    file: tests/cli.test.ts
+    behavior: unknown --only name exits 2 with the exact error listing valid names
+  - id: MC-08
+    phase: P2
+    file: tests/cli.test.ts
+    behavior: --only and --force combine; named Checks rerun
+  - id: MC-09
+    phase: P2
+    file: tests/cli.test.ts
+    behavior: every named Check already passed prints "0 Checks run; all N already passed on <sha>" and exits 0
+  - id: MC-10
+    phase: P2
+    file: tests/cli.test.ts
+    behavior: a positional argument is still an error
+  - id: MC-11
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: the list form with depends_on and per-Check timeout parses and runs
+  - id: MC-12
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a v0.1.0 map-form config fails with "checks must be a list; see usage.md for the list form"
+  - id: MC-13
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: an unknown field such as depends-on is rejected, not silently dropped
+  - id: MC-14
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a duplicate Check name is an error naming the duplicate
+  - id: MC-15
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a depends_on name that does not exist, or names the Check itself, is an error
+  - id: MC-16
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a depends_on cycle is an error naming the cycle
+  - id: MC-17
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: every config error carries a fix-it message, one issue per line, with a path
+  - id: MC-18
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a Check starts only after its dependencies pass; never more than --jobs run at once; ready Checks start in list order
+  - id: MC-19
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a Dependent of a failed Check prints "blocked  depends on <name>", posts failure/not run, and the Run exits 1
+  - id: MC-20
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a Check that already passed reruns when a Dependent of it must run
+  - id: MC-21
+    phase: P1
+    file: tests/cli.test.ts
+    behavior: --help output matches docs/context/usage.md byte for byte after every PR's edits
+  - id: MC-22
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: a run_if_changed Check runs when a changed file matches a glob
+  - id: MC-23
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: negation (!) exclusions apply after inclusions, matching GitHub Actions paths semantics
+  - id: MC-24
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: an empty run_if_changed list is a schema error
+  - id: MC-25
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: with no merge base, every Check runs
+  - id: MC-26
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: a skipped run_if_changed Check prints "skipped  no matching changes" and posts success with that description
+  - id: MC-27
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: a stale origin/<default> older than the branch point only causes extra Checks to run, never missed ones
+  - id: MC-28
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: an already-passed Check with run_if_changed short-circuits before the path filter and posts nothing
+  - id: MC-29
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: when every Check is path-skipped, each posts success/no matching changes and the Run exits 0 (no "all already passed" line)
+  - id: MC-30
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: --force does not bypass the run_if_changed filter; a no-match Check still skips and posts success
+  - id: MC-31
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: --only plus run_if_changed applies the path filter within the selection
+  - id: MC-32
+    phase: P4
+    file: tests/cli.test.ts
+    behavior: a dependency reruns even when its own paths did not change, because a selected Dependent must run
+  - id: MC-33
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: an invalid Check name is rejected with a fix-it message
+  - id: MC-34
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a blank or non-string command is rejected with a fix-it message
+  - id: MC-35
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a non-positive or non-finite top-level or per-Check timeout is rejected
+  - id: MC-36
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: an empty checks list is rejected
+  - id: MC-37
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: an unknown top-level field is rejected, not silently dropped
+  - id: MC-38
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a malformed depends_on (not an array, or non-string entries) is rejected
+  - id: MC-39
+    phase: P2
+    file: tests/cli.test.ts
+    behavior: the totals and posted-statuses lines count the selected closure, not the full config
+  - id: MC-40
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a blocked Check with multiple failed dependencies names all of them in depends_on order
+  - id: MC-41
+    phase: P3
+    file: tests/cli.test.ts
+    behavior: a transitively blocked Check names its direct (blocked) dependency
+  - id: MC-42
+    phase: P1
+    file: tests/cli.test.ts
+    behavior: a signal while results are posting lets the in-flight posts finish and exits 130 without error posts

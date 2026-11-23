@@ -15,18 +15,23 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       tag: ${{ steps.release.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      # pnpm/action-setup v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+      # actions/setup-node v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
-      - run: bun run verify
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -39,22 +44,35 @@ jobs:
   verify-install:
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        how: [npm-global, pnpm-global, bun-global, yarn1-global, npx, pnpm-dlx, bunx]
+        how:
+          [
+            npm-global,
+            pnpm-global,
+            bun-global,
+            yarn1-global,
+            npx,
+            pnpm-dlx,
+            bunx,
+          ]
         ref: [tag, release]
     env:
       SPEC: github:${{ github.repository }}#${{ matrix.ref == 'tag' && needs.release.outputs.tag || 'release' }}
       BIN: local-ci
     steps:
-      - uses: actions/setup-node@v4
+      # actions/setup-node v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
-      - uses: pnpm/action-setup@v4
+      # pnpm/action-setup v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
         with:
           version: 10
-      - uses: oven-sh/setup-bun@v2
+      # oven-sh/setup-bun v2.2.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
       - name: Install and run
         run: |
           set -euo pipefail

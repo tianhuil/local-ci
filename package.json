@@ -1,9 +1,13 @@
 {
 	"name": "local-ci",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"private": true,
 	"license": "MIT",
 	"type": "module",
+	"packageManager": "pnpm@10.15.0",
+	"engines": {
+		"node": ">=18"
+	},
 	"bin": {
 		"local-ci": "bin/local-ci.js"
 	},
@@ -13,19 +17,28 @@
 	],
 	"scripts": {
 		"lint": "biome check .",
-		"typecheck": "tsc --noEmit",
-		"test": "bun test",
+		"typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+		"test": "vitest run",
+		"test:e2e": "pnpm build && LOCAL_CI_E2E=1 vitest run tests/github.e2e.test.ts",
 		"release": "node scripts/release.mts",
-		"verify": "bun run lint && bun run typecheck && bun run build && bun test"
+		"verify": "pnpm lint && pnpm typecheck && pnpm build && vitest run"
 	},
 	"dependencies": {
 		"p-map": "^7.0.2",
 		"yaml": "^2.6.1"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^1.9.4",
-		"@types/node": "^22.10.2",
+		"@biomejs/biome": "^2.6.8",
+		"@types/node": "^24.19.2",
 		"commander": "^15.1.0",
-		"typescript": "^5.7.2"
+		"husky": "^9.1.7",
+		"lint-staged": "^17.6.2",
+		"typescript": "^5.7.2",
+		"vitest": "^5.1.1"
+	},
+	"pnpm": {
+		"onlyBuiltDependencies": [
+			"@biomejs/biome"
+		]
 	}
 }

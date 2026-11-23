@@ -8,14 +8,63 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
-      - run: bun run verify
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      # pnpm/action-setup v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+      # actions/setup-node v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
       - name: Verify packed install
         run: |
           set -euo pipefail
           tarball=$(node scripts/release.mts pack)
           npm install -g "$tarball"
           test "$(local-ci --version)" = "$(node -p "require('./package.json').version")"
+
+  # Real push and real Commit Statuses on this repo, via the job's own token.
+  # Test branches are named local-ci-e2e/<epoch>-<run>-<random> and deleted
+  # right after the test; the sweep below removes this run's leftovers and any
+  # older than an hour (e.g. from cancelled runs).
+  e2e:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      # pnpm/action-setup v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+      # actions/setup-node v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:e2e
+      - name: Sweep leftover test branches
+        if: always()
+        run: |
+          set -euo pipefail
+          now=$(date +%s)
+          git ls-remote --heads origin 'refs/heads/local-ci-e2e/*' | while read -r _ ref; do
+            name=${ref#refs/heads/}
+            rest=${name#local-ci-e2e/}
+            epoch=${rest%%-*}
+            run=${rest#*-}
+            if [[ "$run" == "$GITHUB_RUN_ID-"* ]] || { [[ "$epoch" =~ ^[0-9]+$ ]] && (( now - epoch > 3600 )); }; then
+              echo "deleting $name"
+              git push -q origin --delete "$name" || true
+            fi
+          done
