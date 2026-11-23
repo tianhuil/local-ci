@@ -1,4 +1,5 @@
 ---
+
 name: cli-for-agents
 description: Use when building, changing, or reviewing a CLI that agents run: its commands, `--help` text, output, errors, or the skill that teaches it.
 ---
@@ -86,13 +87,13 @@ Ship the skill from the CLI (`tool skills`) or the package's `skills/` folder, s
 
 Give a fresh agent only "`tool` is installed" and a real task, then read its transcript. Classify each stumble:
 
-| Stumble | Fix |
-| --- | --- |
-| Guessed an option or command wrongly | Rename for consistency, or add an example |
-| Repeated a call after an error | Put the fix command in the error |
-| Parsed human output | Add or document `--format json` |
-| Didn't know to use the CLI, or skipped a step | Sharpen the skill's trigger or workflow |
-| Read a giant dump | Lower the default limit or fields |
+| Stumble                                       | Fix                                       |
+| --------------------------------------------- | ----------------------------------------- |
+| Guessed an option or command wrongly          | Rename for consistency, or add an example |
+| Repeated a call after an error                | Put the fix command in the error          |
+| Parsed human output                           | Add or document `--format json`           |
+| Didn't know to use the CLI, or skipped a step | Sharpen the skill's trigger or workflow   |
+| Read a giant dump                             | Lower the default limit or fields         |
 
 You're done when a second cold run finishes the task with no stumbles.
 
