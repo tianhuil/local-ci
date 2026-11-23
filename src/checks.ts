@@ -13,6 +13,7 @@ export type Result = {
 	// Set when status is "blocked": every direct dependency that did not
 	// pass, in depends_on order.
 	blockedOn?: string[];
+	pathSkipped?: boolean;
 };
 
 // Checks currently running, so a SIGINT/SIGTERM handler can stop them

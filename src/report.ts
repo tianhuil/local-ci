@@ -4,7 +4,9 @@ export function printCheckResults(results: Result[], width: number): void {
 	for (const result of results) {
 		const name = result.check.name.padEnd(width);
 		if (result.status === "skipped") {
-			console.log(`${name}  skipped  already passed`);
+			console.log(
+				`${name}  skipped  ${result.pathSkipped ? "no matching changes" : "already passed"}`,
+			);
 			continue;
 		}
 		if (result.status === "blocked") {

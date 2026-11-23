@@ -1,7 +1,7 @@
 # local-ci
 
 [![CI](https://github.com/tianhuil/local-ci/actions/workflows/ci.yml/badge.svg)](https://github.com/tianhuil/local-ci/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.2.0-blue)](https://github.com/tianhuil/local-ci/releases)
+[![Release](https://img.shields.io/badge/release-v0.2.1-blue)](https://github.com/tianhuil/local-ci/releases)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -14,14 +14,14 @@ Works with any repository that uses GitHub pull requests and a YAML file of shel
 Requires [Node.js 18+](https://nodejs.org), `git`, and the [GitHub CLI](https://cli.github.com) logged in (`gh auth login` — the default scopes already allow Commit Statuses).
 
 ```sh
-pnpm add --global github:tianhuil/local-ci#v0.2.0   # or: npm i -g github:tianhuil/local-ci#v0.2.0
+pnpm add --global github:tianhuil/local-ci#v0.2.1   # or: npm i -g github:tianhuil/local-ci#v0.2.1
 ```
 
-For one-off runs use `npx github:tianhuil/local-ci#v0.2.0`, `pnpm dlx`, or `bunx`; pin a tag for repeatability, because `pnpm dlx` and `bunx` cache the moving `#release` ref.
+For one-off runs use `npx github:tianhuil/local-ci#v0.2.1`, `pnpm dlx`, or `bunx`; pin a tag for repeatability, because `pnpm dlx` and `bunx` cache the moving `#release` ref.
 
 ```sh
 $ local-ci --version
-0.2.0
+0.2.1
 ```
 
 `main` carries source only; installs come from the [`release`](https://github.com/tianhuil/local-ci/tree/release) branch and its tags.
@@ -79,9 +79,10 @@ checks:
   - name: build
     command: act -j build # run a GitHub Actions job locally; needs Docker
     timeout: 300 # overrides the top-level timeout
+    run_if_changed: ["src/**", "!src/generated/**"] # optional path filter
 ```
 
-A Check whose dependency failed, timed out, or was itself blocked doesn't run: it prints `blocked  depends on <names>` and posts `failure` with description `not run; depends on <names>`.
+A Check whose dependency failed, timed out, or was itself blocked doesn't run: it prints `blocked  depends on <names>` and posts `failure` with description `not run; depends on <names>`. An optional `run_if_changed` list uses GitHub Actions-style globs; `!` patterns exclude paths after inclusions. A Check with no matching changed files prints `skipped  no matching changes` and posts success.
 
 Key design choices, one line each:
 

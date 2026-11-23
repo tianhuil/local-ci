@@ -54,6 +54,16 @@ const DependsOnSchema = z.array(
 		error: "depends_on must be a list of Check names, e.g. depends_on: [build]",
 	},
 );
+const RunIfChangedSchema = z
+	.array(
+		z
+			.string({ error: "each run_if_changed entry must be a non-empty glob" })
+			.min(1, {
+				error: "each run_if_changed entry must be a non-empty glob",
+			}),
+		{ error: "run_if_changed must be a non-empty list of globs" },
+	)
+	.min(1, { error: "run_if_changed must contain at least one glob" });
 
 function unknownField(
 	issue: { code?: string; keys?: PropertyKey[] },
@@ -69,11 +79,15 @@ export const CheckSchema = z.strictObject(
 		command: CommandSchema,
 		timeout: TimeoutSchema.optional(),
 		depends_on: DependsOnSchema.optional(),
+		run_if_changed: RunIfChangedSchema.optional(),
 	},
 	{
 		error: (issue) =>
 			issue.code === "unrecognized_keys"
-				? unknownField(issue, "name, command, timeout, or depends_on")
+				? unknownField(
+						issue,
+						"name, command, timeout, depends_on, or run_if_changed",
+					)
 				: "each Check must be a map of name and command, e.g. - name: unit with command: pnpm test",
 	},
 );

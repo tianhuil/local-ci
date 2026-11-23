@@ -9,10 +9,12 @@ function statusFor(result) {
             state: "failure",
             description: `not run; depends on ${(result.blockedOn ?? []).join(", ")}`,
         };
-    const state = result.status === "passed" ? "success" : "failure";
-    const description = result.status === "passed"
-        ? `passed in ${result.duration}s`
-        : `failed in ${result.duration}s (${result.timedOut ? "timeout" : `exit ${result.code}`})`;
+    const state = result.status === "passed" || result.pathSkipped ? "success" : "failure";
+    const description = result.pathSkipped
+        ? "no matching changes"
+        : result.status === "passed"
+            ? `passed in ${result.duration}s`
+            : `failed in ${result.duration}s (${result.timedOut ? "timeout" : `exit ${result.code}`})`;
     return { state, description };
 }
 function isRecord(value) {

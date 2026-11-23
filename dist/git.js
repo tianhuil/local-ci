@@ -2,6 +2,18 @@ import { command, commandStderr, git } from "./proc.js";
 export async function resolveGitDir(cwd = process.cwd()) {
     return git(["rev-parse", "--path-format=absolute", "--git-dir"], cwd);
 }
+// Uses the merge base found by preflight's default-branch remote, without
+// fetching. A missing merge base means the caller must run every Check.
+export async function changedFiles(defaultBranch, cwd = process.cwd()) {
+    try {
+        const base = await git(["merge-base", `origin/${defaultBranch}`, "HEAD"], cwd);
+        const names = await git(["diff", "--name-only", base, "HEAD"], cwd);
+        return names ? names.split("\n").filter(Boolean) : [];
+    }
+    catch {
+        return undefined;
+    }
+}
 // Resolved once per Run: the slug cannot change mid-Run, and the shutdown
 // path must never stall resolving it again before a post. The lookup is
 // cached as a promise, failure included, so a failed lookup is attempted
