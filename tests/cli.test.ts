@@ -202,11 +202,11 @@ describe("local-ci CLI contract", () => {
 			encoding: "utf8",
 		});
 		expect(version.status).toBe(0);
-		expect(version.stdout).toBe("0.2.1\n");
+		expect(version.stdout).toBe("0.2.2\n");
 		const shortVersion = spawnSync(process.execPath, [BIN, "-V"], {
 			encoding: "utf8",
 		});
-		expect(shortVersion.stdout).toBe("0.2.1\n");
+		expect(shortVersion.stdout).toBe("0.2.2\n");
 		const shortHelp = spawnSync(process.execPath, [BIN, "-h"], {
 			encoding: "utf8",
 		});
@@ -1454,6 +1454,32 @@ exec ${REAL_GIT} "$@"
 		});
 		expect(rerunResult.status).toBe(0);
 		expect(rerunResult.stdout).toContain("base  passed");
+	});
+
+	test("a dependent that becomes ready while later pending posts are in flight runs and posts once", async () => {
+		// base finishes during later's slow pending post, after the announce
+		// pass has already skipped dependent as not ready.
+		const repo = await makeRepo(`checks:
+  - name: dependent
+    command: echo ran >> "$RUN_LOG"
+    depends_on: [base]
+  - name: base
+    command: echo base
+  - name: later
+    command: echo later
+`);
+		const runLog = join(repo.dir, "..", `runs-${Date.now()}.log`);
+		const postLog = join(repo.dir, "..", `posts-${Date.now()}.log`);
+		const result = runCli(repo, [], {
+			RUN_LOG: runLog,
+			GH_POST_LOG: postLog,
+			GH_PENDING_DELAY: "1",
+		});
+		expect(result.status, allOutput(result)).toBe(0);
+		expect((await readFile(runLog, "utf8")).match(/ran/g)).toHaveLength(1);
+		const posts = await readFile(postLog, "utf8");
+		expect(posts.match(/context=local-ci\/dependent/g)).toHaveLength(2); // one pending, one result
+		expect(result.stdout.match(/dependent +passed/g)).toHaveLength(1);
 	});
 
 	test("MC-12 MC-13 MC-14 MC-15 MC-16 MC-17 MC-33 MC-34 MC-35 MC-36 MC-37 MC-38: rejects invalid list configurations with paths and fixes", {
