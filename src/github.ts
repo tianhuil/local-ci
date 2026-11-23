@@ -157,7 +157,7 @@ export async function postResult(
 export async function postResults(
 	results: Result[],
 	sha: string,
-	totalChecks: number,
+	totalSelected: number,
 ): Promise<{ posted: number; failures: number }> {
 	let posted = 0;
 	let failures = 0;
@@ -193,7 +193,7 @@ export async function postResults(
 	).length;
 	if (posted > 0) {
 		console.log(
-			`\nposted ${posted} Commit Status${posted === 1 ? "" : "es"} to ${sha.slice(0, 7)}; ${checkFailures ? `${checkFailures} of ${totalChecks} Checks failed` : `all ${totalChecks} Checks passed`}`,
+			`\nposted ${posted} Commit Status${posted === 1 ? "" : "es"} to ${sha.slice(0, 7)}; ${checkFailures ? `${checkFailures} of ${totalSelected} Checks failed` : `all ${totalSelected} Checks passed`}`,
 		);
 	}
 	return { posted, failures };

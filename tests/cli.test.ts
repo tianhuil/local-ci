@@ -202,11 +202,11 @@ describe("local-ci CLI contract", () => {
 			encoding: "utf8",
 		});
 		expect(version.status).toBe(0);
-		expect(version.stdout).toBe("0.1.1\n");
+		expect(version.stdout).toBe("0.1.2\n");
 		const shortVersion = spawnSync(process.execPath, [BIN, "-V"], {
 			encoding: "utf8",
 		});
-		expect(shortVersion.stdout).toBe("0.1.1\n");
+		expect(shortVersion.stdout).toBe("0.1.2\n");
 		const shortHelp = spawnSync(process.execPath, [BIN, "-h"], {
 			encoding: "utf8",
 		});
@@ -217,7 +217,7 @@ describe("local-ci CLI contract", () => {
 		for (const [args, message] of [
 			[
 				["--forse"],
-				"error: unknown option --forse; valid options: --force, --no-push, --jobs, --help, --version",
+				"error: unknown option --forse; valid options: --force, --only, --no-push, --jobs, --help, --version",
 			],
 			[
 				["unit"],
@@ -483,6 +483,128 @@ exec ${REAL_GIT} "$@"
 		const api = await readFile(apiLog, "utf8");
 		expect(api).toContain(`commits/${repo.sha}/status?per_page=100`);
 		expect(api).not.toContain("/statuses/");
+	});
+
+	test("MC-06: --only runs and posts only the named Checks plus their dependencies", async () => {
+		const config =
+			'checks:\n  one: "echo ran-one >> $TRACE"\n  two: "echo ran-two >> $TRACE"\n  three: "echo ran-three >> $TRACE"\n';
+		const repo = await makeRepo(config);
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-mc06-"));
+		const trace = join(dir, "trace.log");
+		const postLog = join(dir, "posts.log");
+		const result = runCli(repo, ["--only", "two"], {
+			TRACE: trace,
+			GH_POST_LOG: postLog,
+		});
+		expect(result.status).toBe(0);
+		// Only the named Check gets a line; the rest are absent (invariant 1).
+		expect(result.stdout).toContain("two  passed");
+		expect(result.stdout).not.toContain("one");
+		expect(result.stdout).not.toContain("three");
+		// Invariant 3: a not-selected Check posts nothing, so the status from
+		// an earlier Run stands — no pending and no result for one or three.
+		const posts = await readFile(postLog, "utf8");
+		expect(posts).toContain("state=pending -f context=local-ci/two");
+		expect(posts).toContain("state=success -f context=local-ci/two");
+		expect(posts).not.toContain("local-ci/one");
+		expect(posts).not.toContain("local-ci/three");
+		const traceText = await readFile(trace, "utf8");
+		expect(traceText).toContain("ran-two");
+		expect(traceText).not.toContain("ran-one");
+		expect(traceText).not.toContain("ran-three");
+	});
+
+	test("MC-07: unknown --only name exits 2 with the exact error listing valid names", async () => {
+		const config =
+			"checks:\n  lint: echo lint\n  audit: echo audit\n  verify: echo verify\n  build: echo build\n  browser-smoke: echo smoke\n";
+		const repo = await makeRepo(config);
+		const postLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-mc07-")),
+			"posts.log",
+		);
+		const result = runCli(repo, ["--only", "verfy"], {
+			GH_POST_LOG: postLog,
+		});
+		expect(result.status).toBe(2);
+		expect(result.stderr.trim()).toBe(
+			'error: unknown Check "verfy" for --only; Checks: lint, audit, verify, build, browser-smoke',
+		);
+		// Refused to start: nothing pushed, run, or posted.
+		expect(allOutput(result)).not.toContain("pushed");
+		expect(await readIfPresent(postLog)).toBe("");
+	});
+
+	test("MC-08: --only and --force combine; named Checks rerun", async () => {
+		const repo = await makeRepo(
+			'checks:\n  unit: "echo ran-unit >> $TRACE"\n  other: "echo ran-other >> $TRACE"\n',
+		);
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-mc08-"));
+		const trace = join(dir, "trace.log");
+		const postLog = join(dir, "posts.log");
+		const result = runCli(repo, ["--only", "unit", "--force"], {
+			GH_STATUSES:
+				'[{"state":"success","context":"local-ci/unit"},{"state":"success","context":"local-ci/other"}]',
+			TRACE: trace,
+			GH_POST_LOG: postLog,
+		});
+		expect(result.status).toBe(0);
+		// --force bypasses the already-passed skip for the named Check only.
+		expect(result.stdout).toContain("unit  passed");
+		expect(result.stdout).not.toContain("skipped");
+		const traceText = await readFile(trace, "utf8");
+		expect(traceText).toContain("ran-unit");
+		expect(traceText).not.toContain("ran-other");
+		const posts = await readFile(postLog, "utf8");
+		expect(posts).toContain("state=success -f context=local-ci/unit");
+		expect(posts).not.toContain("local-ci/other");
+	});
+
+	test("MC-09: every named Check already passed prints the zero-Checks line and exits 0", async () => {
+		const repo = await makeRepo(
+			'checks:\n  unit: "echo ran-unit"\n  other: "echo ran-other"\n',
+		);
+		const postLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-mc09-")),
+			"posts.log",
+		);
+		const result = runCli(repo, ["--only", "unit,other"], {
+			GH_STATUSES:
+				'[{"state":"success","context":"local-ci/unit"},{"state":"success","context":"local-ci/other"}]',
+			GH_POST_LOG: postLog,
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(
+			`0 Checks run; all 2 already passed on ${repo.sha.slice(0, 7)}`,
+		);
+		expect(await readIfPresent(postLog)).toBe("");
+	});
+
+	test("MC-10: a positional argument is still an error", async () => {
+		const repo = await makeRepo();
+		const result = runCli(repo, ["unit"]);
+		expect(result.status).toBe(2);
+		expect(result.stderr.trim()).toBe(
+			'error: unexpected argument "unit"; local-ci takes no arguments',
+		);
+	});
+
+	test("MC-39: the totals and posted-statuses lines count the selected closure, not the full config", async () => {
+		const repo = await makeRepo(
+			"checks:\n  pass: echo ok\n  fail: exit 3\n  other: echo other\n",
+		);
+		const result = runCli(repo, ["--only", "fail,pass"], {
+			GH_STATUSES: '[{"state":"success","context":"local-ci/pass"}]',
+		});
+		expect(result.status).toBe(1);
+		expect(result.stdout).toContain("pass  skipped  already passed");
+		expect(result.stdout).toContain("fail  failed   1s  exit 3");
+		expect(result.stdout).not.toContain("other");
+		// The denominator is the selection (2), never the config (3), and one
+		// post reads in the singular.
+		expect(result.stdout).toContain(
+			`posted 1 Commit Status to ${repo.sha.slice(0, 7)}; 1 of 2 Checks failed`,
+		);
+		expect(result.stdout).not.toContain("1 of 3");
 	});
 
 	test("MC-01: posts a pending Commit Status for every Check about to run, after push, before execution", async () => {

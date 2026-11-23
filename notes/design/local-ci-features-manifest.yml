@@ -2,7 +2,7 @@
 # unless every id whose phase is listed in enforced_phases appears in the
 # named file's source (test title). Each PR appends its phase; removing one
 # weakens the gate. Add rows freely; never remove, rename, or renumber one.
-enforced_phases: [P1]
+enforced_phases: [P1, P2]
 cases:
   - id: MC-01
     phase: P1

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import process from "node:process";
 import pMap from "p-map";
 import { type Result, runCheck, terminateRunningChecks } from "./checks.js";
-import { type Options, parseArgs } from "./cli.js";
+import { type Options, parseArgs, validateOnly } from "./cli.js";
 import { type Check, loadChecks } from "./config.js";
 import { push, repoSlug, resolveGitDir } from "./git.js";
 import {
@@ -200,6 +200,14 @@ export async function main() {
 		const options = parseArgs(process.argv.slice(2));
 		const stopEarlySignals = installEarlySignalHandlers();
 		const info = await preflight(options);
+		validateOnly(options, info.checks);
+		// The selected closure: with --only, the named Checks (config order);
+		// without it, every Check. Everything downstream — skipping, pending,
+		// output, and the totals denominators — runs on the selection.
+		const only = options.only ? new Set(options.only) : undefined;
+		const selected = only
+			? info.checks.filter((check) => only.has(check.name))
+			: info.checks;
 		await push(info.branch, options.noPush, info.sha);
 		// The stateful handler is installed before the early one is removed,
 		// so no stretch — now or after future edits — runs on Node's default
@@ -219,10 +227,10 @@ export async function main() {
 		recordSwap("early-removed");
 		stopEarlySignals();
 		const passed = await statuses(info.sha);
-		const skipped: Result[] = info.checks
+		const skipped: Result[] = selected
 			.filter((check) => passed.has(`local-ci/${check.name}`) && !options.force)
 			.map((check) => ({ check, status: "skipped", duration: 0 }));
-		const pending = info.checks.filter(
+		const pending = selected.filter(
 			(check) => !passed.has(`local-ci/${check.name}`) || options.force,
 		);
 		state.toRun = pending;
@@ -264,16 +272,16 @@ export async function main() {
 		);
 		if (!ran.length) {
 			console.log(
-				`0 Checks run; all ${info.checks.length} already passed on ${info.sha.slice(0, 7)}`,
+				`0 Checks run; all ${selected.length} already passed on ${info.sha.slice(0, 7)}`,
 			);
 			state.phase = "done";
 			if (state.interrupted) process.exit(130);
 			return;
 		}
-		const width = Math.max(...info.checks.map((check) => check.name.length));
+		const width = Math.max(...selected.map((check) => check.name.length));
 		printCheckResults(all, width);
 		printFailurePreviews(ran, info.sha);
-		const posting = await postResults(ran, info.sha, info.checks.length);
+		const posting = await postResults(ran, info.sha, selected.length);
 		state.phase = "done";
 		if (state.interrupted) process.exit(130);
 		if (
