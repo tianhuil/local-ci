@@ -202,11 +202,11 @@ describe("local-ci CLI contract", () => {
 			encoding: "utf8",
 		});
 		expect(version.status).toBe(0);
-		expect(version.stdout).toBe("0.2.0\n");
+		expect(version.stdout).toBe("0.2.1\n");
 		const shortVersion = spawnSync(process.execPath, [BIN, "-V"], {
 			encoding: "utf8",
 		});
-		expect(shortVersion.stdout).toBe("0.2.0\n");
+		expect(shortVersion.stdout).toBe("0.2.1\n");
 		const shortHelp = spawnSync(process.execPath, [BIN, "-h"], {
 			encoding: "utf8",
 		});
@@ -1506,6 +1506,70 @@ exec ${REAL_GIT} "$@"
 			expect(result.status).toBe(1);
 			expect(result.stderr).toContain(message);
 		}
+	});
+
+	test("MC-22 MC-23 MC-24 MC-26 MC-27 MC-29 MC-30: run_if_changed matching", async () => {
+		const config = `checks:
+  - name: source
+    command: "echo source"
+    run_if_changed: ["src/**", "!src/generated/**"]
+  - name: docs
+    command: "echo docs"
+    run_if_changed: ["docs/**"]
+`;
+		const repo = await makeRepo(config);
+		git(["push", "-q", "origin", "HEAD:refs/heads/main"], repo.dir);
+		await mkdir(join(repo.dir, "src"), { recursive: true });
+		await mkdir(join(repo.dir, "src/generated"), { recursive: true });
+		await writeFile(join(repo.dir, "src/app.ts"), "changed");
+		await writeFile(join(repo.dir, "src/generated/out.ts"), "generated");
+		git(["add", "."], repo.dir);
+		git(["commit", "-qm", "source change"], repo.dir);
+		const postLog = join(
+			await mkdtemp(join(tmpdir(), "local-ci-p4-")),
+			"posts",
+		);
+		const result = runCli(repo, ["--force"], { GH_POST_LOG: postLog });
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("source  passed");
+		expect(result.stdout).toContain("docs    skipped  no matching changes");
+		const posts = await readFile(postLog, "utf8");
+		expect(posts).toContain("context=local-ci/docs");
+		expect(posts).toContain("description=no matching changes");
+		const empty = await makeRepo(
+			`checks:\n  - name: empty\n    command: echo bad\n    run_if_changed: []\n`,
+		);
+		const invalid = runCli(empty);
+		expect(invalid.status).toBe(1);
+		expect(invalid.stderr).toContain(
+			"run_if_changed must contain at least one glob",
+		);
+	});
+
+	test("MC-25: no merge base runs every path-filtered Check", async () => {
+		const repo = await makeRepo(
+			`checks:\n  - name: filtered\n    command: echo ran\n    run_if_changed: [docs/**]\n`,
+		);
+		const result = runCli(repo);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("filtered  passed");
+	});
+
+	test("MC-28 MC-31 MC-32: precedence and dependency rerun", async () => {
+		const repo = await makeRepo(
+			`checks:\n  - name: build\n    command: echo build\n    run_if_changed: [src/**]\n  - name: unit\n    command: echo unit\n    depends_on: [build]\n    run_if_changed: [tests/**]\n`,
+		);
+		git(["push", "-q", "origin", "HEAD:refs/heads/main"], repo.dir);
+		await mkdir(join(repo.dir, "tests"));
+		await writeFile(join(repo.dir, "tests/unit.ts"), "changed");
+		git(["add", "."], repo.dir);
+		git(["commit", "-qm", "test change"], repo.dir);
+		const result = runCli(repo, ["--only", "unit"], {
+			GH_STATUSES: '[{"state":"success","context":"local-ci/build"}]',
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("build  passed");
+		expect(result.stdout).toContain("unit   passed");
 	});
 
 	test("uses the resolved git directory for linked-worktree logs", async () => {

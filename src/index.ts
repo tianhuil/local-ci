@@ -1,11 +1,12 @@
 import { appendFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import process from "node:process";
 import { type Result, runCheck, terminateRunningChecks } from "./checks.js";
 import { type Options, parseArgs, validateOnly } from "./cli.js";
 import { type Check, loadChecks } from "./config.js";
-import { push, repoSlug, resolveGitDir } from "./git.js";
+import { changedFiles, push, repoSlug, resolveGitDir } from "./git.js";
 import {
 	postInterrupted,
 	postPending,
@@ -21,6 +22,10 @@ import {
 	waitForInFlightCommands,
 } from "./proc.js";
 import { printCheckResults, printFailurePreviews } from "./report.js";
+
+const picomatch = createRequire(import.meta.url)("picomatch") as (
+	pattern: string,
+) => (value: string) => boolean;
 
 async function preflight(options: Options) {
 	const dirty = await git(["status", "--porcelain"]);
@@ -62,7 +67,7 @@ async function preflight(options: Options) {
 			);
 		}
 	}
-	return { ...config, branch, sha };
+	return { ...config, branch, defaultBranch, sha };
 }
 
 // Handlers are installed before preflight: that early handler just exits
@@ -216,6 +221,18 @@ function selectClosure(checks: Check[], names: Set<string>): Check[] {
 // every dependency with it, even one that already passed on this SHA —
 // its build output may not exist in this working tree. --force puts every
 // selected Check in the must-run set, so the same expansion covers it.
+function matchesChangedPath(patterns: string[], files: string[]): boolean {
+	return files.some((file) => {
+		let included = false;
+		for (const pattern of patterns) {
+			const negative = pattern.startsWith("!");
+			const matcher = picomatch(negative ? pattern.slice(1) : pattern);
+			if (matcher(file)) included = !negative;
+		}
+		return included;
+	});
+}
+
 function withDependencies(selected: Check[], mustRun: Check[]): Set<string> {
 	const byName = new Map(selected.map((check) => [check.name, check]));
 	const names = new Set(mustRun.map((check) => check.name));
@@ -396,15 +413,30 @@ export async function main() {
 		// Precedence, outermost first: --only selection (above) → the
 		// already-passed skip, bypassed by --force and by invariant 2's rerun
 		// rule → dependency blocking (inside runScheduled).
+		const changed = await changedFiles(info.defaultBranch);
+		// Skip precedence is explicit: already-passed Checks short-circuit before
+		// path filtering; only Checks that would run are filtered by paths.
+		const eligible = selected.filter(
+			(check) => !passed.has(`local-ci/${check.name}`) || options.force,
+		);
+		const pathSkipped = eligible.filter(
+			(check) =>
+				check.run_if_changed &&
+				changed !== undefined &&
+				!matchesChangedPath(check.run_if_changed, changed),
+		);
 		const mustRun = withDependencies(
 			selected,
-			selected.filter(
-				(check) => !passed.has(`local-ci/${check.name}`) || options.force,
-			),
+			eligible.filter((check) => !pathSkipped.includes(check)),
 		);
 		const skipped: Result[] = selected
 			.filter((check) => !mustRun.has(check.name))
-			.map((check) => ({ check, status: "skipped", duration: 0 }));
+			.map((check) => ({
+				check,
+				status: "skipped",
+				duration: 0,
+				pathSkipped: pathSkipped.includes(check),
+			}));
 		const pending = selected.filter((check) => mustRun.has(check.name));
 		state.toRun = pending;
 		const gitDir = await resolveGitDir();
@@ -426,7 +458,7 @@ export async function main() {
 		const all = [...skipped, ...ran].sort(
 			(a, b) => info.checks.indexOf(a.check) - info.checks.indexOf(b.check),
 		);
-		if (!ran.length) {
+		if (!ran.length && skipped.every((result) => !result.pathSkipped)) {
 			console.log(
 				`0 Checks run; all ${selected.length} already passed on ${info.sha.slice(0, 7)}`,
 			);
@@ -437,7 +469,11 @@ export async function main() {
 		const width = Math.max(...selected.map((check) => check.name.length));
 		printCheckResults(all, width);
 		printFailurePreviews(ran, info.sha);
-		const posting = await postResults(ran, info.sha, selected.length);
+		const posting = await postResults(
+			[...skipped.filter((result) => result.pathSkipped), ...ran],
+			info.sha,
+			selected.length,
+		);
 		state.phase = "done";
 		if (state.interrupted) process.exit(130);
 		if (

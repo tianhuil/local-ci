@@ -12,7 +12,7 @@ $ local-ci
 ## Install
 
 ```console
-$ pnpm add --global github:tianhuil/local-ci#v0.2.0
+$ pnpm add --global github:tianhuil/local-ci#v0.2.1
 $ pnpm add --global github:tianhuil/local-ci#release
 ```
 
@@ -38,6 +38,7 @@ checks:
     command: vitest run
     depends_on: [typecheck]
     timeout: 300 # optional; overrides the top-level timeout
+    run_if_changed: ["src/**", "!src/generated/**"] # optional
   - name: build
     command: act -j build # runs a GitHub Actions job locally; needs Docker
 ```
@@ -45,6 +46,8 @@ checks:
 `depends_on` names the Checks this one needs finished first. A Check starts once every dependency has passed. If a dependency fails, times out, or is itself blocked, the Check doesn't run: its line reads `blocked  depends on <names>` and it posts `failure` with description `not run; depends on <names>`. Every `depends_on` name must exist in the file, no Check may depend on itself, and cycles are rejected.
 
 A Check that exceeds its timeout is killed and fails; its line shows `timeout` in place of an exit code.
+
+`run_if_changed` is an optional non-empty list of GitHub Actions-style path globs. The Check runs only when a changed file matches; patterns beginning with `!` exclude paths after inclusions. A path-skipped Check prints `skipped  no matching changes` and posts a successful status with that description. Changes are computed from the merge base with `origin/<default-branch>` without fetching; if no merge base exists, every Check runs.
 
 An invalid file exits 1 with one line per problem, each naming its location and the fix:
 
@@ -175,7 +178,7 @@ feature/login already up to date on origin (8d41e07)
 0 Checks run; all 4 already passed on 8d41e07
 ```
 
-`--force` runs every Check anyway, for example to rule out a flaky pass.
+`--force` reruns every Check anyway, for example to rule out a flaky pass, but does not bypass `run_if_changed` path filtering.
 
 ---
 
@@ -264,12 +267,14 @@ Push the current branch, run every Check in local-ci.yml, and post one
 Commit Status (local-ci/<check>) per Check to the pushed commit on GitHub.
 Each Check posts pending ("running…") while it runs, then its final state.
 A Check with depends_on starts once its dependencies have passed; one whose
-dependency failed is blocked and reports what it depends on. Prints one line
+dependency failed is blocked and reports what it depends on. A Check with
+run_if_changed runs only when changed files match its GitHub Actions-style globs;
+use ! patterns for exclusions. Prints one line
 per Check in local-ci.yml list order; logs go to .git/local-ci/logs/<sha>/.
 
 Options:
   --force          run every Check, even ones that already passed on this
-                   commit (default: skip them)
+                   commit (default: skip them; path filters still apply)
   --only <names>   run only the named Checks plus what they depend on,
                    comma-separated; the rest keep their Commit Statuses
                    from earlier Runs

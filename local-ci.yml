@@ -9,3 +9,4 @@ checks:
     timeout: 300
   - name: build
     command: pnpm build
+    run_if_changed: ["src/**", "tests/**"]
