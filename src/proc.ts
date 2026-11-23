@@ -18,8 +18,17 @@ export async function git(
 	return (await exec("git", args, { cwd, env: safeEnv })).stdout.trimEnd();
 }
 
-export async function command(args: string[], cwd = process.cwd()) {
-	return exec(args[0], args.slice(1), { cwd, env: safeEnv });
+export async function command(
+	args: string[],
+	cwd = process.cwd(),
+	timeout?: number,
+) {
+	return exec(args[0], args.slice(1), {
+		cwd,
+		env: safeEnv,
+		timeout,
+		killSignal: "SIGKILL",
+	});
 }
 
 export function commandStderr(error: unknown): string {

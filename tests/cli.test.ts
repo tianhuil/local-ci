@@ -34,7 +34,7 @@ if [ "$1" = api ]; then
     */commits/*/status*) echo '{"state":"'"${"${GH_COMBINED_STATE:-failure}"}"'","statuses":'"${"${GH_STATUSES:-[]}"}"'}'; exit 0 ;;
     */commits/*) [ "${"${GH_COMMIT_MISSING:-0}"}" = 1 ] && exit 1; echo '{}'; exit 0 ;;
     */statuses/*)
-      case "$*" in *" -f "*) [ -n "${"${GH_POST_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_POST_LOG}"}"; [ -n "${"${GH_POST_DELAY:-}"}" ] && sleep "${"${GH_POST_DELAY}"}"; [ "${"${GH_POST_FAIL:-0}"}" = 1 ] && exit 1; case "$*" in *"state=pending"*) [ "${"${GH_PENDING_FAIL:-0}"}" = 1 ] && exit 1;; esac; case "$*" in *"${"${GH_FAIL_CONTEXT:-__never__}"}"*) exit 1;; esac; echo '{}'; exit 0;; esac
+      case "$*" in *" -f "*) [ -n "${"${GH_POST_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_POST_LOG}"}"; [ -n "${"${GH_POST_DELAY:-}"}" ] && sleep "${"${GH_POST_DELAY}"}"; case "$*" in *"state=pending"*) [ -n "${"${GH_PENDING_DELAY:-}"}" ] && sleep "${"${GH_PENDING_DELAY}"}";; esac; case "$*" in *"state=error"*) [ -n "${"${GH_ERROR_DELAY:-}"}" ] && sleep "${"${GH_ERROR_DELAY}"}";; esac; [ "${"${GH_POST_FAIL:-0}"}" = 1 ] && exit 1; case "$*" in *"state=pending"*) [ "${"${GH_PENDING_FAIL:-0}"}" = 1 ] && exit 1;; esac; case "$*" in *"${"${GH_FAIL_CONTEXT:-__never__}"}"*) exit 1;; esac; [ -n "${"${GH_APPLY_LOG:-}"}" ] && printf '%s\n' "$*" >> "${"${GH_APPLY_LOG}"}"; echo '{}'; exit 0;; esac
       exit 1 ;;
   esac
 fi
@@ -550,9 +550,13 @@ exec ${REAL_GIT} "$@"
 			if (first !== undefined) expect(deadGroup(first)).toBe(true);
 			if (stubborn !== undefined) expect(deadGroup(stubborn)).toBe(true);
 		} finally {
-			// Stop only processes this test started, by exact process-group
-			// id, whether or not the assertions above passed.
-			for (const pgid of [first, stubborn, await pgidOf("second")]) {
+			// Stop only processes this test started, by exact process-group id,
+			// whether or not the assertions above passed. Re-read every pid
+			// file at cleanup time: one can appear after the setup above
+			// already gave up, and killing only the Runner would leave its
+			// detached Check group alive.
+			for (const name of ["first", "stubborn", "second"]) {
+				const pgid = await pgidOf(name);
 				if (pgid === undefined) continue;
 				try {
 					process.kill(-pgid, "SIGKILL");
@@ -588,6 +592,138 @@ exec ${REAL_GIT} "$@"
 		expect(posts).toContain("-f context=local-ci/a");
 		expect(posts).toContain("-f context=local-ci/b");
 		expect(posts).not.toContain("state=error");
+	});
+
+	test("a signal while a pending post is in flight lets it settle, then posts the interruption", {
+		timeout: 30000,
+	}, async () => {
+		const repo = await makeRepo('checks:\n  a: "echo a"\n  b: "echo b"\n');
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
+		const postLog = join(dir, "posts.log");
+		const applyLog = join(dir, "applies.log");
+		// Pending posts take 3s and every other post is fast, so without
+		// serializing the shutdown the interruption would land before the
+		// in-flight pending and be overwritten by it.
+		const runner = spawnCli(repo, [], {
+			GH_POST_LOG: postLog,
+			GH_APPLY_LOG: applyLog,
+			GH_PENDING_DELAY: "3",
+		});
+		try {
+			// The first pending post is logged while still in flight.
+			await waitUntil(async () =>
+				(await readIfPresent(postLog)).includes("state=pending"),
+			);
+			runner.child.kill("SIGTERM");
+			expect(await runner.exited).toBe(130);
+			// Leave room for an orphaned request (the defect) to land late.
+			await sleep(3500);
+			const applies = await readIfPresent(applyLog);
+			const pendingA = applies.indexOf(
+				"-f state=pending -f context=local-ci/a",
+			);
+			const errorA = applies.indexOf("-f state=error -f context=local-ci/a");
+			expect(pendingA).toBeGreaterThanOrEqual(0);
+			expect(errorA).toBeGreaterThan(pendingA);
+			// b never announced itself, so it gets no status at all.
+			expect(applies).not.toContain("local-ci/b");
+			const posts = await readFile(postLog, "utf8");
+			expect(posts).not.toContain("local-ci/b");
+		} finally {
+			runner.child.kill("SIGKILL");
+		}
+	});
+
+	test("an interrupt after one Check completed posts its result, not just interrupted statuses", {
+		timeout: 30000,
+	}, async () => {
+		const config =
+			'checks:\n  quick: "echo quick-done >> $TRACE"\n  slow: "echo $$ > $READY/slow.pid; sleep 9871"\n';
+		const repo = await makeRepo(config);
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
+		const ready = join(dir, "ready");
+		await mkdir(ready);
+		const trace = join(dir, "trace.log");
+		const postLog = join(dir, "posts.log");
+		const runner = spawnCli(repo, [], {
+			READY: ready,
+			TRACE: trace,
+			GH_POST_LOG: postLog,
+		});
+		try {
+			// quick finished (its marker landed) while slow still runs.
+			await waitUntil(
+				async () =>
+					(await readIfPresent(trace)).includes("quick-done") &&
+					existsSync(join(ready, "slow.pid")),
+			);
+			// Let the completed Check's result register before signaling.
+			await sleep(300);
+			runner.child.kill("SIGTERM");
+			expect(await runner.exited).toBe(130);
+			const posts = await readFile(postLog, "utf8");
+			expect(posts).toContain(
+				"-f state=success -f context=local-ci/quick -f description=passed in 1s",
+			);
+			expect(posts).toContain(
+				"-f state=error -f context=local-ci/slow -f description=interrupted",
+			);
+			// quick's pending was replaced by its result, in order.
+			expect(
+				posts.indexOf("state=pending -f context=local-ci/quick"),
+			).toBeLessThan(posts.indexOf("state=success -f context=local-ci/quick"));
+		} finally {
+			const pgid = Number(await readIfPresent(join(ready, "slow.pid")));
+			if (Number.isInteger(pgid) && pgid > 0) {
+				try {
+					process.kill(-pgid, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}
+			runner.child.kill("SIGKILL");
+		}
+	});
+
+	test("a second signal during a blocked shutdown post force-exits 130 without duplicate posts", {
+		timeout: 15000,
+	}, async () => {
+		const repo = await makeRepo(
+			'checks:\n  only: "echo $$ > $READY/only.pid; sleep 9871"\n',
+		);
+		const dir = await mkdtemp(join(tmpdir(), "local-ci-sig-"));
+		const ready = join(dir, "ready");
+		await mkdir(ready);
+		const postLog = join(dir, "posts.log");
+		const runner = spawnCli(repo, [], {
+			READY: ready,
+			GH_POST_LOG: postLog,
+			GH_ERROR_DELAY: "10",
+		});
+		try {
+			await waitUntil(async () => existsSync(join(ready, "only.pid")));
+			// First signal: the shutdown starts but blocks inside the error post.
+			runner.child.kill("SIGINT");
+			await waitUntil(async () =>
+				(await readIfPresent(postLog)).includes("state=error"),
+			);
+			const signaled = Date.now();
+			runner.child.kill("SIGINT");
+			expect(await runner.exited).toBe(130);
+			expect(Date.now() - signaled).toBeLessThan(2000);
+			const posts = await readFile(postLog, "utf8");
+			expect(posts.match(/state=error/g)).toHaveLength(1);
+		} finally {
+			const pgid = Number(await readIfPresent(join(ready, "only.pid")));
+			if (Number.isInteger(pgid) && pgid > 0) {
+				try {
+					process.kill(-pgid, "SIGKILL");
+				} catch {
+					/* already dead */
+				}
+			}
+			runner.child.kill("SIGKILL");
+		}
 	});
 
 	test("runs --no-push against a commit already on the remote without pushing", async () => {

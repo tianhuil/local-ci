@@ -5,6 +5,19 @@ import { command } from "./proc.js";
 
 type CommitStatus = { state: "success"; context: string };
 
+// Every Commit Status post is bounded, so a hung gh call cannot block the
+// exit an interrupt already requested.
+const POST_TIMEOUT_MS = 10_000;
+
+function statusFor(result: Result): { state: string; description: string } {
+	const state = result.status === "passed" ? "success" : "failure";
+	const description =
+		result.status === "passed"
+			? `passed in ${result.duration}s`
+			: `failed in ${result.duration}s (${result.timedOut ? "timeout" : `exit ${result.code}`})`;
+	return { state, description };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -44,22 +57,32 @@ export async function statuses(sha: string): Promise<Set<string>> {
 export async function postPending(
 	checks: Check[],
 	sha: string,
+	onPosted?: (context: string) => void,
+	shouldStop?: () => boolean,
 ): Promise<{ failures: number }> {
 	let failures = 0;
 	for (const check of checks) {
+		// An interrupt stops announcing Checks: the in-flight post settles,
+		// then no further pending posts.
+		if (shouldStop?.()) break;
 		const context = `local-ci/${check.name}`;
 		try {
-			await command([
-				"gh",
-				"api",
-				`repos/${await repoSlug()}/statuses/${sha}`,
-				"-f",
-				"state=pending",
-				"-f",
-				`context=${context}`,
-				"-f",
-				"description=running…",
-			]);
+			await command(
+				[
+					"gh",
+					"api",
+					`repos/${await repoSlug()}/statuses/${sha}`,
+					"-f",
+					"state=pending",
+					"-f",
+					`context=${context}`,
+					"-f",
+					"description=running…",
+				],
+				process.cwd(),
+				POST_TIMEOUT_MS,
+			);
+			onPosted?.(context);
 		} catch {
 			console.error(
 				`error: failed to post Commit Status ${context} to GitHub; run gh auth login, then local-ci`,
@@ -76,20 +99,56 @@ export async function postInterrupted(
 ): Promise<void> {
 	for (const check of checks) {
 		try {
-			await command([
+			await command(
+				[
+					"gh",
+					"api",
+					`repos/${await repoSlug()}/statuses/${sha}`,
+					"-f",
+					"state=error",
+					"-f",
+					`context=local-ci/${check.name}`,
+					"-f",
+					"description=interrupted",
+				],
+				process.cwd(),
+				POST_TIMEOUT_MS,
+			);
+		} catch {
+			/* best effort: the Run is already exiting 130 */
+		}
+	}
+}
+
+// Posts one Check's final Commit Status; false means the post failed.
+export async function postResult(
+	result: Result,
+	sha: string,
+): Promise<boolean> {
+	const { state, description } = statusFor(result);
+	const context = `local-ci/${result.check.name}`;
+	try {
+		await command(
+			[
 				"gh",
 				"api",
 				`repos/${await repoSlug()}/statuses/${sha}`,
 				"-f",
-				"state=error",
+				`state=${state}`,
 				"-f",
-				`context=local-ci/${check.name}`,
+				`context=${context}`,
 				"-f",
-				"description=interrupted",
-			]);
-		} catch {
-			/* best effort: the Run is already exiting 130 */
-		}
+				`description=${description}`,
+			],
+			process.cwd(),
+			POST_TIMEOUT_MS,
+		);
+		return true;
+	} catch {
+		console.error(
+			`error: failed to post Commit Status ${context} to GitHub; run gh auth login, then local-ci`,
+		);
+		return false;
 	}
 }
 
@@ -101,24 +160,24 @@ export async function postResults(
 	let posted = 0;
 	let failures = 0;
 	for (const result of results) {
-		const state = result.status === "passed" ? "success" : "failure";
-		const description =
-			result.status === "passed"
-				? `passed in ${result.duration}s`
-				: `failed in ${result.duration}s (${result.timedOut ? "timeout" : `exit ${result.code}`})`;
+		const { state, description } = statusFor(result);
 		const context = `local-ci/${result.check.name}`;
 		try {
-			await command([
-				"gh",
-				"api",
-				`repos/${await repoSlug()}/statuses/${sha}`,
-				"-f",
-				`state=${state}`,
-				"-f",
-				`context=${context}`,
-				"-f",
-				`description=${description}`,
-			]);
+			await command(
+				[
+					"gh",
+					"api",
+					`repos/${await repoSlug()}/statuses/${sha}`,
+					"-f",
+					`state=${state}`,
+					"-f",
+					`context=${context}`,
+					"-f",
+					`description=${description}`,
+				],
+				process.cwd(),
+				POST_TIMEOUT_MS,
+			);
 			posted += 1;
 		} catch {
 			console.error(
