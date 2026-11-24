@@ -5,7 +5,11 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`local-ci` runs a pull request's checks on the Author's own machine and posts each result to GitHub as a Commit Status (`local-ci/<check>`), so PRs don't spend cloud CI minutes or wait in a runner queue. Your `main` branch keeps its normal cloud CI as the neutral authority.
+Cloud CI throttles your agents and burns through your credits.
+
+Your agents already ran the tests locally but the PR is halted as they queue for a spot on Github CI for a test they already ran.
+
+ `local-ci` runs a pull request's checks on the Author's own machine instead and posts each result to GitHub as a Commit Status (`local-ci/<check>`). Your `main` branch keeps its normal cloud CI as the neutral authority.
 
 Works with any repository that uses GitHub pull requests and a YAML file of shell commands. Not for teams that need untrusted code isolated from Author machines.
 
