@@ -5,9 +5,9 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Cloud CI throttles your agents and burns through your credits.
+## Cloud CI throttles your agents and burns through your credits.
 
-Your agents already ran the tests locally but the PR is halted as they queue for a spot on Github CI for a test they already ran.
+Your agents already ran the tests locally, yet the PR sits idle in a GitHub runner queue waiting to run them again.
 
  `local-ci` runs a pull request's checks on the Author's own machine instead and posts each result to GitHub as a Commit Status (`local-ci/<check>`). Your `main` branch keeps its normal cloud CI as the neutral authority.
 
