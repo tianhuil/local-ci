@@ -11,7 +11,7 @@ Your agents already ran the tests locally, yet the PR sits idle in a GitHub runn
 
  `local-ci` runs a pull request's checks on the Author's own machine instead and posts each result to GitHub as a Commit Status (`local-ci/<check>`). Your `main` branch keeps its normal cloud CI as the neutral authority.
 
-Works with any repository that uses GitHub pull requests and a YAML file of shell commands. Not for teams that need untrusted code isolated from Author machines.
+Works with any repository that uses GitHub pull requests. 
 
 ## Install
 
