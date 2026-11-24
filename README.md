@@ -1,9 +1,13 @@
+<div align="center">
+
 # local-ci
 
 [![CI](https://github.com/tianhuil/local-ci/actions/workflows/ci.yml/badge.svg)](https://github.com/tianhuil/local-ci/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/badge/release-v0.2.2-blue)](https://github.com/tianhuil/local-ci/releases)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+</div>
 
 ## Cloud CI throttles your agents and burns through your credits.
 
