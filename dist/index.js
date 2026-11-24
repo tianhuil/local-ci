@@ -290,12 +290,17 @@ async function runScheduled(toRun, state, jobs, root) {
         }
         if (state.interrupted)
             break;
-        // Any ready Checks not announced above are started here when a slot
-        // remains (for example after a zero-job scheduler wakeup).
+        // Announced Checks that found no free slot above start here when one
+        // frees up. Only announced ones: starting a Check here that became
+        // ready during the announce pass would skip its pending post, and the
+        // next pass would announce and start it a second time.
         for (const check of toRun) {
             if (running.size >= jobs)
                 break;
-            if (started.has(check.name) || settled.has(check.name) || !ready(check))
+            if (!announced.has(check.name) ||
+                started.has(check.name) ||
+                settled.has(check.name) ||
+                !ready(check))
                 continue;
             started.add(check.name);
             const done = runCheck(check, root).then((result) => {
@@ -316,6 +321,12 @@ async function runScheduled(toRun, state, jobs, root) {
             });
             running.set(check.name, done);
         }
+        // A Check that became ready during the announce pass is announced on
+        // the next pass, before waiting or concluding nothing is left to run.
+        if (toRun.some((check) => !announced.has(check.name) &&
+            !settled.has(check.name) &&
+            ready(check)))
+            continue;
         if (running.size === 0)
             break; // nothing running: all progress has settled (or deadlocked)
         await idle;

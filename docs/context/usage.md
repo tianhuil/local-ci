@@ -12,7 +12,7 @@ $ local-ci
 ## Install
 
 ```console
-$ pnpm add --global github:tianhuil/local-ci#v0.2.1
+$ pnpm add --global github:tianhuil/local-ci#v0.2.2
 $ pnpm add --global github:tianhuil/local-ci#release
 ```
 
@@ -43,7 +43,7 @@ checks:
     command: act -j build # runs a GitHub Actions job locally; needs Docker
 ```
 
-`depends_on` names the Checks this one needs finished first. A Check starts once every dependency has passed. If a dependency fails, times out, or is itself blocked, the Check doesn't run: its line reads `blocked  depends on <names>` and it posts `failure` with description `not run; depends on <names>`. Every `depends_on` name must exist in the file, no Check may depend on itself, and cycles are rejected.
+`depends_on` names the Checks this one needs finished first. A Check starts once every dependency has passed. Each Check runs at most once per Run, and posts one `pending` and one final status. If a dependency fails, times out, or is itself blocked, the Check doesn't run: its line reads `blocked  depends on <names>` and it posts `failure` with description `not run; depends on <names>`. Every `depends_on` name must exist in the file, no Check may depend on itself, and cycles are rejected.
 
 A Check that exceeds its timeout is killed and fails; its line shows `timeout` in place of an exit code.
 
