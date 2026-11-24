@@ -12,8 +12,8 @@ $ local-ci
 ## Install
 
 ```console
-$ pnpm add --global github:tianhuil/local-ci#v0.2.2
-$ pnpm add --global github:tianhuil/local-ci#release
+$ pnpm add -D github:tianhuil/local-ci#v0.2.2
+$ pnpm add -D github:tianhuil/local-ci#release
 ```
 
 Install a newer tag to upgrade. `main` carries source only, so installs come from the `release` branch tags.

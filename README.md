@@ -9,24 +9,36 @@
 
 Your agents already ran the tests locally, yet the PR sits idle in a GitHub runner queue waiting to run them again.
 
- `local-ci` runs a pull request's checks on the Author's own machine instead and posts each result to GitHub as a Commit Status (`local-ci/<check>`). Your `main` branch keeps its normal cloud CI as the neutral authority.
+`local-ci` runs a pull request's checks on the Author's own machine instead and posts each result to GitHub as a Commit Status (`local-ci/<check>`). Your `main` branch keeps its normal cloud CI as the neutral authority.
 
-Works with any repository that uses GitHub pull requests. 
+Works with any repository that uses GitHub pull requests.
 
 ## Install
 
 Requires [Node.js 18+](https://nodejs.org), `git`, and the [GitHub CLI](https://cli.github.com) logged in (`gh auth login` — the default scopes already allow Commit Statuses).
 
+Add it as a dev dependency, so the version is pinned in the project next to its `local-ci.yml`, and install the `local-ci` skill, which teaches your coding agent when and how to run it:
+
 ```sh
-pnpm add --global github:tianhuil/local-ci#v0.2.2   # or: npm i -g github:tianhuil/local-ci#v0.2.2
+# pnpm
+pnpm add -D github:tianhuil/local-ci#v0.2.2
+pnpm dlx skills add tianhuil/local-ci --skill local-ci
+
+# npm
+npm i -D github:tianhuil/local-ci#v0.2.2
+npx skills add tianhuil/local-ci --skill local-ci
+
+# bun
+bun add -D github:tianhuil/local-ci#v0.2.2
+bunx skills add tianhuil/local-ci --skill local-ci
+```
+
+```sh
+$ pnpm exec local-ci --version   # or: npx local-ci, bunx local-ci
+0.2.2
 ```
 
 For one-off runs use `npx github:tianhuil/local-ci#v0.2.2`, `pnpm dlx`, or `bunx`; pin a tag for repeatability, because `pnpm dlx` and `bunx` cache the moving `#release` ref.
-
-```sh
-$ local-ci --version
-0.2.2
-```
 
 `main` carries source only; installs come from the [`release`](https://github.com/tianhuil/local-ci/tree/release) branch and its tags.
 
@@ -123,7 +135,7 @@ pnpm test:e2e      # pushes a throwaway branch and posts real Commit Statuses
 pnpm release check # build and validate the next release commit locally
 ```
 
-Releases are automated: bump `version` in package.json and push to `main`; a workflow publishes and verifies the install seven ways. Never publish to the npm registry. See [AGENTS.md](AGENTS.md) for the full working agreement.
+Releases are automated: bump `version` in package.json and push to `main`; a workflow publishes and verifies the install nine ways. Never publish to the npm registry. See [AGENTS.md](AGENTS.md) for the full working agreement.
 
 ## License
 
