@@ -39,6 +39,9 @@ checks:
     depends_on: [typecheck]
     timeout: 300 # optional; overrides the top-level timeout
     run_if_changed: ["src/**", "!src/generated/**"] # optional
+  - name: example
+    command: pnpm install --frozen-lockfile && pnpm test
+    copy: examples/app # optional; runs in a fresh copy of just this folder
   - name: build
     command: act -j build # runs a GitHub Actions job locally; needs Docker
 ```
@@ -48,6 +51,10 @@ checks:
 A Check that exceeds its timeout is killed and fails; its line shows `timeout` in place of an exit code.
 
 `run_if_changed` is an optional non-empty list of GitHub Actions-style path globs. The Check runs only when a changed file matches; patterns beginning with `!` exclude paths after inclusions. A path-skipped Check prints `skipped  no matching changes` and posts a successful status with that description. Changes are computed from the merge base with `origin/<default-branch>` without fetching; if no merge base exists, every Check runs.
+
+`copy` is an optional folder path, relative to the repository root. Before the command starts, local-ci extracts that folder as committed at the tested commit (`git archive <sha>:<path>`) into a fresh temporary directory and runs the command there. The copy holds only the folder's committed files: no ignored files such as `node_modules` or build output, and nothing from the rest of the repository, so the Check proves the folder works on its own. When the Check passes, the copy is deleted. When it fails or times out, the copy is kept and the last line of its log reads `local-ci: copy of <path> kept in <dir>`. A path that doesn't exist at the commit, or names a file, fails the Check without running its command. Absolute paths and `..` are rejected as invalid configuration.
+
+Every Check's command, copied or not, runs with `LOCAL_CI_ROOT` set to the repository's root, so a copied Check can still reach scripts in the worktree, for example `node "$LOCAL_CI_ROOT/scripts/check.mjs"`.
 
 An invalid file exits 1 with one line per problem, each naming its location and the fix:
 
