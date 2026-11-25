@@ -1,0 +1,152 @@
+import { repoSlug } from "./git.js";
+import { command } from "./proc.js";
+// Every Commit Status post is bounded, so a hung gh call cannot block the
+// exit an interrupt already requested.
+const POST_TIMEOUT_MS = 10_000;
+function statusFor(result) {
+    if (result.status === "blocked")
+        return {
+            state: "failure",
+            description: `not run; depends on ${(result.blockedOn ?? []).join(", ")}`,
+        };
+    const state = result.status === "passed" || result.pathSkipped ? "success" : "failure";
+    const description = result.pathSkipped
+        ? "no matching changes"
+        : result.status === "passed"
+            ? `passed in ${result.duration}s`
+            : `failed in ${result.duration}s (${result.timedOut ? "timeout" : `exit ${result.code}`})`;
+    return { state, description };
+}
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isSuccessStatus(value) {
+    return (isRecord(value) &&
+        value.state === "success" &&
+        typeof value.context === "string");
+}
+// Latest state per local-ci/* context, as GitHub reports on the combined
+// status endpoint. The top-level state is ignored: GitHub computes it over
+// every tool's contexts, not just local-ci's.
+export async function statuses(sha) {
+    try {
+        const response = await command([
+            "gh",
+            "api",
+            `repos/${await repoSlug()}/commits/${sha}/status?per_page=100`,
+        ]);
+        const combined = JSON.parse(response.stdout);
+        if (!isRecord(combined) || !Array.isArray(combined.statuses))
+            return new Set();
+        return new Set(combined.statuses
+            .filter(isSuccessStatus)
+            .map((status) => status.context)
+            .filter((context) => context.startsWith("local-ci/")));
+    }
+    catch {
+        return new Set();
+    }
+}
+export async function postPending(checks, sha, onPosted, shouldStop) {
+    let failures = 0;
+    for (const check of checks) {
+        // An interrupt stops announcing Checks: the in-flight post settles,
+        // then no further pending posts.
+        if (shouldStop?.())
+            break;
+        const context = `local-ci/${check.name}`;
+        try {
+            await command([
+                "gh",
+                "api",
+                `repos/${await repoSlug()}/statuses/${sha}`,
+                "-f",
+                "state=pending",
+                "-f",
+                `context=${context}`,
+                "-f",
+                "description=running…",
+            ], process.cwd(), POST_TIMEOUT_MS);
+            onPosted?.(context);
+        }
+        catch {
+            console.error(`error: failed to post Commit Status ${context} to GitHub; run gh auth login, then local-ci`);
+            failures += 1;
+        }
+    }
+    return { failures };
+}
+export async function postInterrupted(checks, sha, timeout = POST_TIMEOUT_MS) {
+    for (const check of checks) {
+        try {
+            await command([
+                "gh",
+                "api",
+                `repos/${await repoSlug()}/statuses/${sha}`,
+                "-f",
+                "state=error",
+                "-f",
+                `context=local-ci/${check.name}`,
+                "-f",
+                "description=interrupted",
+            ], process.cwd(), timeout);
+        }
+        catch {
+            /* best effort: the Run is already exiting 130 */
+        }
+    }
+}
+// Posts one Check's final Commit Status; false means the post failed.
+export async function postResult(result, sha, timeout = POST_TIMEOUT_MS) {
+    const { state, description } = statusFor(result);
+    const context = `local-ci/${result.check.name}`;
+    try {
+        await command([
+            "gh",
+            "api",
+            `repos/${await repoSlug()}/statuses/${sha}`,
+            "-f",
+            `state=${state}`,
+            "-f",
+            `context=${context}`,
+            "-f",
+            `description=${description}`,
+        ], process.cwd(), timeout);
+        return true;
+    }
+    catch {
+        console.error(`error: failed to post Commit Status ${context} to GitHub; run gh auth login, then local-ci`);
+        return false;
+    }
+}
+export async function postResults(results, sha, totalSelected) {
+    let posted = 0;
+    let failures = 0;
+    for (const result of results) {
+        const { state, description } = statusFor(result);
+        const context = `local-ci/${result.check.name}`;
+        try {
+            await command([
+                "gh",
+                "api",
+                `repos/${await repoSlug()}/statuses/${sha}`,
+                "-f",
+                `state=${state}`,
+                "-f",
+                `context=${context}`,
+                "-f",
+                `description=${description}`,
+            ], process.cwd(), POST_TIMEOUT_MS);
+            posted += 1;
+        }
+        catch {
+            console.error(`error: failed to post Commit Status ${context} to GitHub; run gh auth login, then local-ci`);
+            failures += 1;
+        }
+    }
+    const checkFailures = results.filter((result) => result.status === "failed" || result.status === "blocked").length;
+    if (posted > 0) {
+        console.log(`\nposted ${posted} Commit Status${posted === 1 ? "" : "es"} to ${sha.slice(0, 7)}; ${checkFailures ? `${checkFailures} of ${totalSelected} Checks failed` : `all ${totalSelected} Checks passed`}`);
+    }
+    return { posted, failures };
+}
