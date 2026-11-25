@@ -2,7 +2,7 @@
 # unless every id whose phase is listed in enforced_phases appears in the
 # named file's source (test title). Each PR appends its phase; removing one
 # weakens the gate. Add rows freely; never remove, rename, or renumber one.
-enforced_phases: [P1, P2, P3, P4]
+enforced_phases: [P1, P2, P3, P4, P5]
 cases:
   - id: MC-01
     phase: P1
@@ -172,3 +172,23 @@ cases:
     phase: P1
     file: tests/cli.test.ts
     behavior: a signal while results are posting lets the in-flight posts finish and exits 130 without error posts
+  - id: MC-43
+    phase: P5
+    file: tests/cli.test.ts
+    behavior: a copy Check runs in a fresh directory holding only its folder's committed files at the tested commit, never ignored files or anything outside the folder
+  - id: MC-44
+    phase: P5
+    file: tests/cli.test.ts
+    behavior: every Check, copied or not, gets LOCAL_CI_ROOT set to the worktree root
+  - id: MC-45
+    phase: P5
+    file: tests/cli.test.ts
+    behavior: a copy is deleted when its Check passes and kept, with its path at the end of the log, when it fails
+  - id: MC-46
+    phase: P5
+    file: tests/cli.test.ts
+    behavior: a copy path that is missing or not a folder at the tested commit fails the Check without running its command
+  - id: MC-47
+    phase: P5
+    file: tests/cli.test.ts
+    behavior: an absolute, tree-escaping, empty, or non-string copy path is rejected as invalid configuration

@@ -100,9 +100,12 @@ checks:
     command: act -j build # run a GitHub Actions job locally; needs Docker
     timeout: 300 # overrides the top-level timeout
     run_if_changed: ["src/**", "!src/generated/**"] # optional path filter
+  - name: example
+    command: pnpm install --frozen-lockfile && pnpm test
+    copy: examples/app # optional; runs in a fresh copy of just this folder
 ```
 
-A Check whose dependency failed, timed out, or was itself blocked doesn't run: it prints `blocked  depends on <names>` and posts `failure` with description `not run; depends on <names>`. An optional `run_if_changed` list uses GitHub Actions-style globs; `!` patterns exclude paths after inclusions. A Check with no matching changed files prints `skipped  no matching changes` and posts success.
+A Check whose dependency failed, timed out, or was itself blocked doesn't run: it prints `blocked  depends on <names>` and posts `failure` with description `not run; depends on <names>`. An optional `run_if_changed` list uses GitHub Actions-style globs; `!` patterns exclude paths after inclusions. A Check with no matching changed files prints `skipped  no matching changes` and posts success. An optional `copy` folder runs the Check in a fresh temporary copy of only that folder's committed files at the tested commit, deleted when it passes and kept (its path printed in the log) when it fails. Every Check gets `LOCAL_CI_ROOT`, the repository root.
 
 Key design choices, one line each:
 

@@ -36,7 +36,12 @@ checks:
     command: pnpm test
     depends_on: [lint] # optional; runs only after lint passes
     run_if_changed: ["src/**"] # optional; runs only when a matching file changed
+  - name: example
+    command: pnpm install --frozen-lockfile && pnpm test
+    copy: examples/app # optional; runs in a fresh copy of only this folder's committed files
 ```
+
+A `copy` Check runs outside the worktree; reach the repository's scripts through `$LOCAL_CI_ROOT`.
 
 An invalid file exits 1 with one line per problem, each naming the fix.
 

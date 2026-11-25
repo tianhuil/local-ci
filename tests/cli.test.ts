@@ -1578,6 +1578,95 @@ exec ${REAL_GIT} "$@"
 		);
 	});
 
+	test("MC-43 MC-44 MC-45: copy runs the Check in a fresh copy of its folder at the tested commit", async () => {
+		const out = await mkdtemp(join(tmpdir(), "local-ci-copy-out-"));
+		const config = `checks:
+  - name: inside
+    copy: ./app/
+    command: 'ls -A > "$OUT/listing"; pwd > "$OUT/cwd"; printf %s "$LOCAL_CI_ROOT" > "$OUT/root"; cat committed.txt > "$OUT/content"'
+  - name: kept
+    copy: app
+    command: 'pwd > "$OUT/kept-cwd"; echo kept-output; exit 3'
+  - name: plain
+    command: 'printf %s "$LOCAL_CI_ROOT" > "$OUT/plain-root"; pwd > "$OUT/plain-cwd"'
+`;
+		const repo = await makeRepo(config);
+		await mkdir(join(repo.dir, "app/nested"), { recursive: true });
+		await writeFile(
+			join(repo.dir, ".gitignore"),
+			"app/ignored.txt\napp/node_modules/\n",
+		);
+		await writeFile(join(repo.dir, "app/committed.txt"), "committed\n");
+		await writeFile(join(repo.dir, "app/nested/deep.txt"), "deep\n");
+		git(["add", "."], repo.dir);
+		git(["commit", "-qm", "app"], repo.dir);
+		const sha = git(["rev-parse", "HEAD"], repo.dir);
+		// Ignored files keep the tree clean but must never reach the copy.
+		await writeFile(join(repo.dir, "app/ignored.txt"), "ignored\n");
+		await mkdir(join(repo.dir, "app/node_modules"), { recursive: true });
+		await writeFile(join(repo.dir, "app/node_modules/dep.js"), "dep\n");
+		const result = runCli(repo, [], { OUT: out });
+		expect(result.status).toBe(1);
+		expect(result.stdout.split("\n")).toContain("inside  passed   1s");
+		expect(result.stdout.split("\n")).toContain("kept    failed   1s  exit 3");
+		expect(result.stdout.split("\n")).toContain("plain   passed   1s");
+		// MC-43: only that folder's committed files, nothing from outside it.
+		expect(
+			(await readFile(join(out, "listing"), "utf8"))
+				.split("\n")
+				.filter(Boolean),
+		).toEqual(["committed.txt", "nested"]);
+		expect(await readFile(join(out, "content"), "utf8")).toBe("committed\n");
+		const cwd = (await readFile(join(out, "cwd"), "utf8")).trim();
+		expect(cwd.startsWith(join(repo.dir, ""))).toBe(false);
+		// MC-44: LOCAL_CI_ROOT is the worktree, for copied and in-place Checks.
+		const root = git(["rev-parse", "--show-toplevel"], repo.dir);
+		expect(await readFile(join(out, "root"), "utf8")).toBe(root);
+		expect(await readFile(join(out, "plain-root"), "utf8")).toBe(root);
+		expect((await readFile(join(out, "plain-cwd"), "utf8")).trim()).toBe(root);
+		// MC-45: deleted on success, kept and named in the log on failure.
+		expect(existsSync(cwd)).toBe(false);
+		const keptCwd = (await readFile(join(out, "kept-cwd"), "utf8")).trim();
+		expect(existsSync(join(keptCwd, "committed.txt"))).toBe(true);
+		const log = await readFile(
+			join(repo.dir, ".git/local-ci/logs", sha.slice(0, 7), "kept.log"),
+			"utf8",
+		);
+		expect(log).toBe(`kept-output\nlocal-ci: copy of app kept in ${keptCwd}\n`);
+		expect(result.stdout).toContain(`local-ci: copy of app kept in ${keptCwd}`);
+	});
+
+	test("MC-46: copy of a folder that is missing at the tested commit fails the Check without running it", async () => {
+		const out = await mkdtemp(join(tmpdir(), "local-ci-copy-missing-"));
+		const repo = await makeRepo(
+			`checks:\n  - name: missing\n    copy: nope\n    command: 'touch "$OUT/ran"'\n  - name: file\n    copy: tracked.txt\n    command: 'touch "$OUT/ran"'\n`,
+		);
+		const result = runCli(repo, [], { OUT: out });
+		expect(result.status).toBe(1);
+		expect(result.stdout.split("\n")).toContain("missing  failed   1s  exit 1");
+		expect(result.stdout.split("\n")).toContain("file     failed   1s  exit 1");
+		expect(result.stdout).toContain(
+			`local-ci: copy: nope is not a folder at ${repo.sha.slice(0, 7)}; fix copy in local-ci.yml`,
+		);
+		expect(result.stdout).toContain(
+			`local-ci: copy: tracked.txt is not a folder at ${repo.sha.slice(0, 7)}`,
+		);
+		expect(existsSync(join(out, "ran"))).toBe(false);
+	});
+
+	test("MC-47: rejects a copy path that is absolute, leaves the tree, or is not a string", async () => {
+		for (const copy of ["/etc", "../outside", "app/../../x", "''", "3"]) {
+			const repo = await makeRepo(
+				`checks:\n  - name: unit\n    copy: ${copy}\n    command: echo ok\n`,
+			);
+			const result = runCli(repo);
+			expect(result.status, copy).toBe(1);
+			expect(result.stderr, copy).toContain(
+				"checks[0].copy: copy must be a folder path relative to the repository root, e.g. copy: packages/app",
+			);
+		}
+	});
+
 	test("MC-27: stale origin/main only causes extra Checks to run", async () => {
 		const repo = await makeRepo(
 			`checks:\n  - name: base\n    command: echo base\n    run_if_changed: [docs/**]\n  - name: source\n    command: echo source\n    run_if_changed: [src/**]\n`,
