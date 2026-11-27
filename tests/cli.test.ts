@@ -198,15 +198,18 @@ describe("local-ci CLI contract", () => {
 		});
 		expect(result.status).toBe(0);
 		expect(result.stdout).toBe(expected);
+		const { version: packageVersion } = JSON.parse(
+			await readFile(new URL("../package.json", import.meta.url), "utf8"),
+		);
 		const version = spawnSync(process.execPath, [BIN, "--version"], {
 			encoding: "utf8",
 		});
 		expect(version.status).toBe(0);
-		expect(version.stdout).toBe("0.2.2\n");
+		expect(version.stdout).toBe(`${packageVersion}\n`);
 		const shortVersion = spawnSync(process.execPath, [BIN, "-V"], {
 			encoding: "utf8",
 		});
-		expect(shortVersion.stdout).toBe("0.2.2\n");
+		expect(shortVersion.stdout).toBe(`${packageVersion}\n`);
 		const shortHelp = spawnSync(process.execPath, [BIN, "-h"], {
 			encoding: "utf8",
 		});
