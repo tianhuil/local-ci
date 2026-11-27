@@ -65,6 +65,31 @@ const RunIfChangedSchema = z
 	)
 	.min(1, { error: "run_if_changed must contain at least one glob" });
 
+const COPY_MESSAGE =
+	"copy must be a folder path relative to the repository root, e.g. copy: packages/app";
+
+// A repository-relative folder, normalized to POSIX form without a leading
+// "./" or trailing "/". "." copies the whole tree. Absolute paths and ".."
+// segments are rejected: the copy comes from `git archive <sha>:<path>`,
+// which only reaches inside the tree.
+const CopySchema = z
+	.string({ error: COPY_MESSAGE })
+	.trim()
+	.min(1, { error: COPY_MESSAGE })
+	.refine(
+		(path) =>
+			!path.startsWith("/") &&
+			!path.includes("\\") &&
+			!path.split("/").includes(".."),
+		{ error: COPY_MESSAGE },
+	)
+	.transform((path) => {
+		const segments = path
+			.split("/")
+			.filter((segment) => segment !== "" && segment !== ".");
+		return segments.length ? segments.join("/") : ".";
+	});
+
 function unknownField(
 	issue: { code?: string; keys?: PropertyKey[] },
 	valid: string,
@@ -80,13 +105,14 @@ export const CheckSchema = z.strictObject(
 		timeout: TimeoutSchema.optional(),
 		depends_on: DependsOnSchema.optional(),
 		run_if_changed: RunIfChangedSchema.optional(),
+		copy: CopySchema.optional(),
 	},
 	{
 		error: (issue) =>
 			issue.code === "unrecognized_keys"
 				? unknownField(
 						issue,
-						"name, command, timeout, depends_on, or run_if_changed",
+						"name, command, timeout, depends_on, run_if_changed, or copy",
 					)
 				: "each Check must be a map of name and command, e.g. - name: unit with command: pnpm test",
 	},

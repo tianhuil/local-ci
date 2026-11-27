@@ -269,7 +269,7 @@ async function runScheduled(toRun, state, jobs, root) {
             // all pending-status posts, and lets an interrupt stop later posts.
             if (!state.interrupted && running.size < jobs) {
                 started.add(check.name);
-                const done = runCheck(check, root).then((result) => {
+                const done = runCheck(check, root, state.sha).then((result) => {
                     state.results.set(check.name, result);
                     settled.add(check.name);
                     if (result.status === "passed")
@@ -303,7 +303,7 @@ async function runScheduled(toRun, state, jobs, root) {
                 !ready(check))
                 continue;
             started.add(check.name);
-            const done = runCheck(check, root).then((result) => {
+            const done = runCheck(check, root, state.sha).then((result) => {
                 state.results.set(check.name, result);
                 settled.add(check.name);
                 if (result.status === "passed")

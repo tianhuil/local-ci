@@ -47,6 +47,24 @@ const RunIfChangedSchema = z
     error: "each run_if_changed entry must be a non-empty glob",
 }), { error: "run_if_changed must be a non-empty list of globs" })
     .min(1, { error: "run_if_changed must contain at least one glob" });
+const COPY_MESSAGE = "copy must be a folder path relative to the repository root, e.g. copy: packages/app";
+// A repository-relative folder, normalized to POSIX form without a leading
+// "./" or trailing "/". "." copies the whole tree. Absolute paths and ".."
+// segments are rejected: the copy comes from `git archive <sha>:<path>`,
+// which only reaches inside the tree.
+const CopySchema = z
+    .string({ error: COPY_MESSAGE })
+    .trim()
+    .min(1, { error: COPY_MESSAGE })
+    .refine((path) => !path.startsWith("/") &&
+    !path.includes("\\") &&
+    !path.split("/").includes(".."), { error: COPY_MESSAGE })
+    .transform((path) => {
+    const segments = path
+        .split("/")
+        .filter((segment) => segment !== "" && segment !== ".");
+    return segments.length ? segments.join("/") : ".";
+});
 function unknownField(issue, valid) {
     const names = (issue.keys ?? []).map((key) => `"${String(key)}"`).join(", ");
     return `unknown field ${names}; remove it, or use ${valid}`;
@@ -57,9 +75,10 @@ export const CheckSchema = z.strictObject({
     timeout: TimeoutSchema.optional(),
     depends_on: DependsOnSchema.optional(),
     run_if_changed: RunIfChangedSchema.optional(),
+    copy: CopySchema.optional(),
 }, {
     error: (issue) => issue.code === "unrecognized_keys"
-        ? unknownField(issue, "name, command, timeout, depends_on, or run_if_changed")
+        ? unknownField(issue, "name, command, timeout, depends_on, run_if_changed, or copy")
         : "each Check must be a map of name and command, e.g. - name: unit with command: pnpm test",
 });
 // Whole-config rules, one .superRefine: unique names; every depends_on

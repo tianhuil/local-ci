@@ -51,6 +51,8 @@ jobs:
         how:
           [
             npm-global,
+            pnpm-dev,
+            npm-dev,
             pnpm-global,
             bun-global,
             yarn1-global,
@@ -82,6 +84,8 @@ jobs:
             pnpm-global)  pnpm add -g "$SPEC";     out=$("$BIN" --version) ;;
             bun-global)   bun add -g "$SPEC";      out=$("$BIN" --version) ;;
             yarn1-global) npm install -g yarn@1; yarn global add "$SPEC"; out=$("$(yarn global bin)/$BIN" --version) ;;
+            pnpm-dev)     cd "$(mktemp -d)"; npm init -y >/dev/null; pnpm add -D "$SPEC"; out=$(pnpm exec "$BIN" --version) ;;
+            npm-dev)      cd "$(mktemp -d)"; npm init -y >/dev/null; npm install -D "$SPEC"; out=$(npx --no-install "$BIN" --version) ;;
             npx)          out=$(npx --yes "$SPEC" --version) ;;
             pnpm-dlx)     out=$(pnpm dlx "$SPEC" --version) ;;
             bunx)         out=$(bunx "$SPEC" --version) ;;

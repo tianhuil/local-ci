@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import process from "node:process";
 import { safeEnv } from "./proc.js";
 // Checks currently running, so a SIGINT/SIGTERM handler can stop them
@@ -43,14 +46,88 @@ export async function terminateRunningChecks() {
     }
     await Promise.all(closes);
 }
-export function runCheck(check, root) {
-    return new Promise((resolve) => {
-        const start = Date.now();
-        console.error(`running ${check.name}…`);
-        const child = spawn(check.command, {
-            shell: true,
+// Extracts `path` as committed at `sha` into `dir`: `git archive` of that
+// tree piped into `tar`, so the copy holds only committed files, never
+// untracked or ignored ones, and nothing from outside `path`.
+function extractTree(root, sha, path, dir) {
+    return new Promise((resolve, reject) => {
+        const tree = path === "." ? sha : `${sha}:${path}`;
+        const archive = spawn("git", ["archive", "--format=tar", tree], {
             cwd: root,
             env: safeEnv,
+            stdio: ["ignore", "pipe", "pipe"],
+        });
+        const tar = spawn("tar", ["-x", "-C", dir], {
+            stdio: ["pipe", "ignore", "pipe"],
+        });
+        let archiveError = "";
+        let tarError = "";
+        archive.stderr?.on("data", (data) => {
+            archiveError += data.toString();
+        });
+        tar.stderr?.on("data", (data) => {
+            tarError += data.toString();
+        });
+        archive.stdout?.pipe(tar.stdin);
+        const closed = (child) => new Promise((done) => {
+            child.on("error", () => done(1));
+            child.on("close", (code) => done(code ?? 1));
+        });
+        Promise.all([closed(archive), closed(tar)]).then(([archiveCode, tarCode]) => {
+            if (archiveCode !== 0)
+                reject(new Error(`copy: ${path} is not a folder at ${sha.slice(0, 7)}; fix copy in local-ci.yml (${archiveError.trim() || `git archive exited ${archiveCode}`})`));
+            else if (tarCode !== 0)
+                reject(new Error(`copy: extracting ${path} failed (${tarError.trim() || `tar exited ${tarCode}`})`));
+            else
+                resolve();
+        });
+    });
+}
+// Runs a Check's command. Every Check gets LOCAL_CI_ROOT, the worktree's
+// root. A Check with `copy` runs in a fresh temp directory holding only
+// that folder at `sha`; the copy is deleted when the Check passes and kept,
+// with its path at the end of the log, when it fails or times out.
+export async function runCheck(check, root, sha = "HEAD") {
+    const start = Date.now();
+    console.error(`running ${check.name}…`);
+    let cwd = root;
+    let copyDir;
+    if (check.copy !== undefined) {
+        copyDir = await mkdtemp(join(tmpdir(), `local-ci-${check.name}-`));
+        try {
+            await extractTree(root, sha, check.copy, copyDir);
+        }
+        catch (error) {
+            await rm(copyDir, { recursive: true, force: true });
+            return {
+                check,
+                status: "failed",
+                duration: Math.max(1, Math.round((Date.now() - start) / 1000)),
+                code: 1,
+                timedOut: false,
+                log: `local-ci: ${error instanceof Error ? error.message : String(error)}\n`,
+            };
+        }
+        cwd = copyDir;
+    }
+    const result = await spawnCheck(check, cwd, root, start);
+    if (copyDir !== undefined) {
+        if (result.status === "passed") {
+            await rm(copyDir, { recursive: true, force: true });
+        }
+        else {
+            const log = result.log ?? "";
+            result.log = `${log}${log === "" || log.endsWith("\n") ? "" : "\n"}local-ci: copy of ${check.copy} kept in ${copyDir}\n`;
+        }
+    }
+    return result;
+}
+function spawnCheck(check, cwd, root, start) {
+    return new Promise((resolve) => {
+        const child = spawn(check.command, {
+            shell: true,
+            cwd,
+            env: { ...safeEnv, LOCAL_CI_ROOT: root },
             detached: true,
         });
         if (child.pid)
