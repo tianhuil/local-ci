@@ -12,7 +12,7 @@ $ local-ci
 ## Install
 
 ```console
-$ pnpm add -D github:tianhuil/local-ci#v0.2.2
+$ pnpm add -D github:tianhuil/local-ci#v0.3.0
 $ pnpm add -D github:tianhuil/local-ci#release
 ```
 

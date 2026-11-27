@@ -3,7 +3,7 @@
 # local-ci
 
 [![CI](https://github.com/tianhuil/local-ci/actions/workflows/ci.yml/badge.svg)](https://github.com/tianhuil/local-ci/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.2.2-blue)](https://github.com/tianhuil/local-ci/releases)
+[![Release](https://img.shields.io/badge/release-v0.3.0-blue)](https://github.com/tianhuil/local-ci/releases)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -25,24 +25,24 @@ Add it as a dev dependency, so the version is pinned in the project next to its 
 
 ```sh
 # pnpm
-pnpm add -D github:tianhuil/local-ci#v0.2.2
+pnpm add -D github:tianhuil/local-ci#v0.3.0
 pnpm dlx skills add tianhuil/local-ci --skill local-ci
 
 # npm
-npm i -D github:tianhuil/local-ci#v0.2.2
+npm i -D github:tianhuil/local-ci#v0.3.0
 npx skills add tianhuil/local-ci --skill local-ci
 
 # bun
-bun add -D github:tianhuil/local-ci#v0.2.2
+bun add -D github:tianhuil/local-ci#v0.3.0
 bunx skills add tianhuil/local-ci --skill local-ci
 ```
 
 ```sh
 $ pnpm exec local-ci --version   # or: npx local-ci, bunx local-ci
-0.2.2
+0.3.0
 ```
 
-For one-off runs use `npx github:tianhuil/local-ci#v0.2.2`, `pnpm dlx`, or `bunx`; pin a tag for repeatability, because `pnpm dlx` and `bunx` cache the moving `#release` ref.
+For one-off runs use `npx github:tianhuil/local-ci#v0.3.0`, `pnpm dlx`, or `bunx`; pin a tag for repeatability, because `pnpm dlx` and `bunx` cache the moving `#release` ref.
 
 `main` carries source only; installs come from the [`release`](https://github.com/tianhuil/local-ci/tree/release) branch and its tags.
 
